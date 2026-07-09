@@ -57,15 +57,13 @@
       </section>
 
       <section class="card">
-        <h2>Custom Odd Piece Pen Tool</h2>
-        <p class="hint">Tap points below to draw a side profile, then extrude it into a 3D part. Good for notched Lincoln-log ends.</p>
-        <canvas id="profileCanvas" width="320" height="190"></canvas>
+        <h2>xTool-style Shape Builder</h2>
+        <p class="hint">Build odd cabin logs by stacking simple blocks, then Shift-click multiple pieces and use Merge or Subtract. Subtract cuts every other selected part out of the primary selected part.</p>
         <div class="button-row wrap">
-          <button id="closeProfileBtn">Close Shape</button>
-          <button id="undoPointBtn">Undo Point</button>
-          <button id="clearProfileBtn">Clear Points</button>
-          <button id="addCustomBtn">Extrude Custom</button>
+          <button id="mergePanelBtn">Merge Selected</button>
+          <button id="subtractPanelBtn">Subtract From Primary</button>
         </div>
+        <p class="hint"><strong>Field workflow:</strong> add temporary cutter blocks, position/rotate them where the notch should be, select the log first, Shift-click cutter blocks, then Subtract.</p>
       </section>
     </aside>
 
@@ -75,6 +73,8 @@
         <button data-mode="rotate" class="mode">Rotate</button>
         <button data-mode="scale" class="mode">Scale</button>
         <button id="duplicateBtn">Duplicate</button>
+        <button id="mergeBtn">Merge</button>
+        <button id="subtractBtn">Subtract</button>
         <button id="deleteBtn">Delete</button>
         <button id="undoBtn">Undo</button>
         <button id="redoBtn">Redo</button>
@@ -86,7 +86,7 @@
         <button data-view="side" class="viewBtn">Side</button>
       </div>
       <div id="canvasHost"></div>
-      <div class="statusbar"><span id="statusText">Ready. Add a block or custom piece.</span></div>
+      <div class="statusbar"><span id="statusText">Ready. Shift-click parts to multi-select. Merge or Subtract custom shapes.</span></div>
     </section>
 
     <aside class="panel right-panel">

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import { Brush, Evaluator, ADDITION, SUBTRACTION } from 'https://unpkg.com/three-bvh-csg@0.0.16/build/index.module.js';
 
 const host = document.getElementById('canvasHost');
 const statusText = document.getElementById('statusText');
@@ -37,10 +38,9 @@ scene.add(grid);
 
 let parts = [];
 let selected = null;
+let selectedIds = new Set();
 let history = [];
 let future = [];
-let profilePoints = [];
-let profileClosed = false;
 const meshes = new Map();
 const labels = new Map();
 
@@ -61,7 +61,7 @@ const readForm = () => ({
 });
 const snapshot = () => JSON.stringify(parts);
 function pushHistory(){ history.push(snapshot()); if(history.length>80) history.shift(); future = []; }
-function restore(json){ parts = JSON.parse(json || '[]'); selected = null; rebuildScene(); renderPanels(); autosave(false); }
+function restore(json){ parts = JSON.parse(json || '[]'); selected = null; selectedIds = new Set(); rebuildScene(); renderPanels(); autosave(false); }
 function autosave(setStatus=true){ localStorage.setItem('cabinRebuildProject', snapshot()); if(setStatus) setStatusText('Saved locally.'); }
 function setStatusText(text){ statusText.textContent = text; }
 function meshScaleFromPart(p){ return new THREE.Vector3(p.length, p.height, p.depth); }
@@ -79,6 +79,16 @@ function makeLabelSprite(text){
 }
 
 function makeGeometry(p){
+  if(p.shape === 'boolean' && p.geometry){
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(p.geometry.positions, 3));
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(p.geometry.normals, 3));
+    if(p.geometry.index) geo.setIndex(p.geometry.index);
+    geo.computeVertexNormals();
+    geo.computeBoundingBox();
+    geo.computeBoundingSphere();
+    return geo;
+  }
   if(p.shape === 'custom' && p.profile?.length > 2){
     const shape = new THREE.Shape();
     p.profile.forEach((pt, i) => i ? shape.lineTo(pt.x, pt.y) : shape.moveTo(pt.x, pt.y));
@@ -110,10 +120,29 @@ function syncMeshToPart(p){
   p.position = mesh.position.toArray(); p.rotation = [mesh.rotation.x, mesh.rotation.y, mesh.rotation.z]; p.scale = mesh.scale.toArray();
   const label = labels.get(p.id); if(label) label.position.set(mesh.position.x, mesh.position.y + (p.height * mesh.scale.y)/2 + .45, mesh.position.z);
 }
-function selectPart(id){
-  selected = parts.find(p => p.id === id) || null;
-  if(selected){ transform.attach(meshes.get(id)); fillForm(selected); setStatusText(`Selected ${selected.label}`); }
-  else transform.detach();
+function highlightSelection(){
+  parts.forEach(p => {
+    const mesh = meshes.get(p.id);
+    if(mesh?.material){
+      mesh.material.emissive = new THREE.Color(selectedIds.has(p.id) ? 0x6b4a1e : 0x000000);
+      mesh.material.emissiveIntensity = selectedIds.has(p.id) ? 0.35 : 0;
+    }
+  });
+}
+function selectPart(id, append=false){
+  const part = parts.find(p => p.id === id) || null;
+  if(!part){ selected = null; selectedIds.clear(); transform.detach(); renderPanels(); return; }
+  if(append){
+    if(selectedIds.has(id) && selectedIds.size > 1) selectedIds.delete(id);
+    else selectedIds.add(id);
+  } else {
+    selectedIds = new Set([id]);
+  }
+  selected = parts.find(p => p.id === id) || [...selectedIds].map(x=>parts.find(p=>p.id===x)).filter(Boolean).at(-1) || null;
+  if(selectedIds.size === 1 && selected){ transform.attach(meshes.get(selected.id)); fillForm(selected); }
+  else { transform.detach(); if(selected) fillForm(selected); }
+  highlightSelection();
+  setStatusText(selectedIds.size > 1 ? `${selectedIds.size} parts selected.` : `Selected ${selected.label}`);
   renderPanels();
 }
 function fillForm(p){
@@ -139,14 +168,89 @@ function updateSelected(){
   createMesh(selected); selectPart(selected.id); renderPanels(); autosave(); setStatusText('Selected part updated.');
 }
 function duplicateSelected(){
-  if(!selected) return;
+  if(!selectedIds.size) return;
   pushHistory();
-  const copy = JSON.parse(JSON.stringify(selected)); copy.id = uid(); copy.label = `${copy.label}-copy`; copy.position[0]+=1; copy.position[2]+=1;
-  parts.push(copy); createMesh(copy); selectPart(copy.id); renderPanels(); autosave();
+  const copies = parts.filter(p=>selectedIds.has(p.id)).map(p=>{
+    const copy = JSON.parse(JSON.stringify(p));
+    copy.id = uid(); copy.label = `${copy.label}-copy`; copy.position[0]+=1; copy.position[2]+=1;
+    return copy;
+  });
+  parts.push(...copies); copies.forEach(createMesh); selectedIds = new Set(copies.map(p=>p.id)); selected = copies.at(-1);
+  if(copies.length === 1) transform.attach(meshes.get(selected.id)); else transform.detach();
+  highlightSelection(); renderPanels(); autosave(); setStatusText(`${copies.length} part(s) duplicated.`);
 }
 function deleteSelected(){
-  if(!selected) return;
-  pushHistory(); const id = selected.id; parts = parts.filter(p=>p.id!==id); selected=null; rebuildScene(); renderPanels(); autosave(); setStatusText('Part deleted.');
+  if(!selectedIds.size) return;
+  pushHistory(); const count = selectedIds.size; parts = parts.filter(p=>!selectedIds.has(p.id)); selected=null; selectedIds.clear(); rebuildScene(); renderPanels(); autosave(); setStatusText(`${count} part(s) deleted.`);
+}
+
+function worldBrushFromPart(p){
+  const mesh = meshes.get(p.id);
+  if(!mesh) return null;
+  mesh.updateMatrixWorld(true);
+  const geo = mesh.geometry.clone();
+  geo.applyMatrix4(mesh.matrixWorld);
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshStandardMaterial({ color:p.color, roughness:.72, metalness:.04 });
+  const brush = new Brush(geo, mat);
+  brush.updateMatrixWorld(true);
+  return brush;
+}
+function geometryPayload(geo){
+  geo = geo.toNonIndexed();
+  geo.computeVertexNormals();
+  return {
+    positions: Array.from(geo.attributes.position.array),
+    normals: Array.from(geo.attributes.normal.array)
+  };
+}
+function addBooleanResult(resultMesh, label, sourceParts){
+  resultMesh.geometry.computeBoundingBox();
+  const box = resultMesh.geometry.boundingBox;
+  const size = new THREE.Vector3(); box.getSize(size);
+  const center = new THREE.Vector3(); box.getCenter(center);
+  const primary = sourceParts[0];
+  const p = {
+    id: uid(), shape: 'boolean', label, layer: primary.layer, material: primary.material,
+    color: primary.color, length: Number(size.x.toFixed(3)) || primary.length,
+    height: Number(size.y.toFixed(3)) || primary.height, depth: Number(size.z.toFixed(3)) || primary.depth,
+    units: primary.units || 'ft', leftAngle: 0, rightAngle: 0,
+    notes: `Custom shape made from: ${sourceParts.map(x=>x.label).join(', ')}`,
+    position:[0,0,0], rotation:[0,0,0], scale:[1,1,1], fastenedTo:null,
+    geometry: geometryPayload(resultMesh.geometry)
+  };
+  parts = parts.filter(x=>!selectedIds.has(x.id));
+  parts.push(p);
+  rebuildScene();
+  selectPart(p.id);
+  renderPanels(); autosave();
+  return p;
+}
+function mergeSelected(){
+  const chosen = parts.filter(p=>selectedIds.has(p.id));
+  if(chosen.length < 2) return setStatusText('Select at least 2 parts to merge.');
+  pushHistory();
+  try{
+    const evaluator = new Evaluator();
+    let result = worldBrushFromPart(chosen[0]);
+    for(const p of chosen.slice(1)) result = evaluator.evaluate(result, worldBrushFromPart(p), ADDITION);
+    const made = addBooleanResult(result, `${chosen[0].label}-merged`, chosen);
+    setStatusText(`Merged ${chosen.length} pieces into ${made.label}.`);
+  }catch(err){ console.error(err); setStatusText('Merge failed. Try using simpler overlapping block shapes.'); }
+}
+function subtractSelected(){
+  const chosen = parts.filter(p=>selectedIds.has(p.id));
+  if(chosen.length < 2 || !selected) return setStatusText('Select the main part first, then Shift-click cutter parts.');
+  const primary = selected;
+  const cutters = chosen.filter(p=>p.id !== primary.id);
+  pushHistory();
+  try{
+    const evaluator = new Evaluator();
+    let result = worldBrushFromPart(primary);
+    for(const cutter of cutters) result = evaluator.evaluate(result, worldBrushFromPart(cutter), SUBTRACTION);
+    const made = addBooleanResult(result, `${primary.label}-cut`, [primary, ...cutters]);
+    setStatusText(`Subtracted ${cutters.length} cutter piece(s) from ${primary.label}.`);
+  }catch(err){ console.error(err); setStatusText('Subtract failed. Try making cutter blocks overlap clearly through the target part.'); }
 }
 function fastenSelected(){ if(!selected) return; pushHistory(); selected.fastenedTo = selected.layer; autosave(); renderPanels(); setStatusText(`${selected.label} fastened/grouped to ${selected.layer}.`); }
 function updateVisibility(){
@@ -156,11 +260,14 @@ function updateVisibility(){
 function getVisibleLayers(){ return JSON.parse(localStorage.getItem('cabinRebuildLayers') || '{}'); }
 function setLayerVisible(layer, visible){ const state=getVisibleLayers(); state[layer]=visible; localStorage.setItem('cabinRebuildLayers', JSON.stringify(state)); updateVisibility(); }
 function renderPanels(){
-  if(selected){
+  if(selectedIds.size > 1){
+    const chosen = parts.filter(p=>selectedIds.has(p.id));
+    selectedInfo.innerHTML = `<div><strong>${chosen.length} parts selected</strong></div><div class="meta">Primary: ${selected?.label || 'none'}</div><div class="meta">Use Merge to combine, or Subtract to cut all other selected pieces out of the primary.</div>`;
+  } else if(selected){
     selectedInfo.innerHTML = `<div><strong>${selected.label}</strong></div><div>${selected.length} × ${selected.depth} × ${selected.height} ${selected.units||'ft'}</div><div><span class="pill">${selected.layer}</span><span class="pill">${selected.material}</span><span class="pill">${selected.shape}</span></div><div class="meta">Cuts: L ${selected.leftAngle||0}° / R ${selected.rightAngle||0}°</div><div class="meta">${selected.notes||'No notes.'}</div>`;
   } else selectedInfo.textContent = 'Nothing selected.';
-  partsList.innerHTML = parts.map(p=>`<div class="part-row" data-id="${p.id}"><strong>${p.label}</strong><div class="meta">${p.length}×${p.depth}×${p.height} ${p.units||'ft'} • ${p.layer} • ${p.material}</div></div>`).join('') || '<div class="meta">No parts yet.</div>';
-  document.querySelectorAll('.part-row').forEach(row=>row.onclick=()=>selectPart(row.dataset.id));
+  partsList.innerHTML = parts.map(p=>`<div class="part-row ${selectedIds.has(p.id)?'selected':''}" data-id="${p.id}"><strong>${p.label}</strong><div class="meta">${p.length}×${p.depth}×${p.height} ${p.units||'ft'} • ${p.layer} • ${p.material}</div></div>`).join('') || '<div class="meta">No parts yet.</div>';
+  document.querySelectorAll('.part-row').forEach(row=>row.onclick=(e)=>selectPart(row.dataset.id, e.shiftKey || e.ctrlKey || e.metaKey));
   const layers = [...new Set(parts.map(p=>p.layer))]; const state = getVisibleLayers();
   layersList.innerHTML = layers.map(layer=>`<label class="layer-row"><span>${layer}</span><input type="checkbox" data-layer="${layer}" ${state[layer]===false?'':'checked'} /></label>`).join('') || '<div class="meta">No layers yet.</div>';
   document.querySelectorAll('.layer-row input').forEach(cb=>cb.onchange=()=>setLayerVisible(cb.dataset.layer, cb.checked));
@@ -172,7 +279,8 @@ renderer.domElement.addEventListener('pointerdown', ev => {
   pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1; pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
   const hits = raycaster.intersectObjects([...meshes.values()], false);
-  if(hits[0]) selectPart(hits[0].object.userData.id);
+  if(hits[0]) selectPart(hits[0].object.userData.id, ev.shiftKey || ev.ctrlKey || ev.metaKey);
+  else if(!ev.shiftKey && !ev.ctrlKey && !ev.metaKey){ selected=null; selectedIds.clear(); transform.detach(); highlightSelection(); renderPanels(); }
 });
 
 function setView(view){
@@ -184,29 +292,8 @@ function setView(view){
   orbit.target.set(0,1,0); orbit.update();
 }
 
-const profileCanvas = $('profileCanvas'); const pctx = profileCanvas.getContext('2d');
-function drawProfile(){
-  pctx.clearRect(0,0,profileCanvas.width,profileCanvas.height);
-  pctx.fillStyle='#100c09'; pctx.fillRect(0,0,profileCanvas.width,profileCanvas.height);
-  pctx.strokeStyle='#3d3025'; pctx.lineWidth=1;
-  for(let x=0;x<profileCanvas.width;x+=20){pctx.beginPath();pctx.moveTo(x,0);pctx.lineTo(x,profileCanvas.height);pctx.stroke();}
-  for(let y=0;y<profileCanvas.height;y+=20){pctx.beginPath();pctx.moveTo(0,y);pctx.lineTo(profileCanvas.width,y);pctx.stroke();}
-  if(profilePoints.length){
-    pctx.strokeStyle='#d9ad5f'; pctx.lineWidth=3; pctx.beginPath();
-    profilePoints.forEach((p,i)=> i?pctx.lineTo(p.x,p.y):pctx.moveTo(p.x,p.y)); if(profileClosed) pctx.closePath(); pctx.stroke();
-    profilePoints.forEach((p,i)=>{pctx.fillStyle=i===0?'#3d7b55':'#f2e6cf'; pctx.beginPath(); pctx.arc(p.x,p.y,5,0,Math.PI*2); pctx.fill();});
-  }
-}
-profileCanvas.addEventListener('pointerdown', e=>{ const r=profileCanvas.getBoundingClientRect(); profilePoints.push({x:(e.clientX-r.left)*profileCanvas.width/r.width,y:(e.clientY-r.top)*profileCanvas.height/r.height}); profileClosed=false; drawProfile(); });
-function normalizeProfile(){
-  const pts = profilePoints.length > 2 ? profilePoints : [{x:30,y:30},{x:290,y:30},{x:290,y:160},{x:30,y:160}];
-  const minX=Math.min(...pts.map(p=>p.x)), maxX=Math.max(...pts.map(p=>p.x)), minY=Math.min(...pts.map(p=>p.y)), maxY=Math.max(...pts.map(p=>p.y));
-  const w=maxX-minX||1, h=maxY-minY||1;
-  return pts.map(p=>({ x:((p.x-minX)/w)-.5, y:-(((p.y-minY)/h)-.5) }));
-}
-
-$('addBlockBtn').onclick=()=>addPart('block'); $('addCustomBtn').onclick=()=>addPart('custom'); $('updatePartBtn').onclick=updateSelected;
-$('duplicateBtn').onclick=duplicateSelected; $('deleteBtn').onclick=deleteSelected; $('fastenBtn').onclick=fastenSelected;
+$('addBlockBtn').onclick=()=>addPart('block'); $('updatePartBtn').onclick=updateSelected;
+$('duplicateBtn').onclick=duplicateSelected; $('mergeBtn').onclick=mergeSelected; $('subtractBtn').onclick=subtractSelected; $('mergePanelBtn').onclick=mergeSelected; $('subtractPanelBtn').onclick=subtractSelected; $('deleteBtn').onclick=deleteSelected; $('fastenBtn').onclick=fastenSelected;
 $('undoBtn').onclick=()=>{ if(!history.length) return; future.push(snapshot()); restore(history.pop()); };
 $('redoBtn').onclick=()=>{ if(!future.length) return; history.push(snapshot()); restore(future.pop()); };
 document.querySelectorAll('.mode').forEach(btn=>btn.onclick=()=>{ document.querySelectorAll('.mode').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); transform.setMode(btn.dataset.mode); });
@@ -215,11 +302,9 @@ $('saveBtn').onclick=()=>autosave();
 $('exportBtn').onclick=()=>{ const blob=new Blob([JSON.stringify({version:1,parts},null,2)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='cabin-rebuild-project.json'; a.click(); URL.revokeObjectURL(a.href); };
 $('importInput').onchange=e=>{ const file=e.target.files[0]; if(!file)return; const reader=new FileReader(); reader.onload=()=>{ pushHistory(); const data=JSON.parse(reader.result); parts=data.parts||data||[]; rebuildScene(); renderPanels(); autosave(); }; reader.readAsText(file); };
 $('clearBtn').onclick=()=>{ if(confirm('Clear this project from the app? Export first if needed.')){ pushHistory(); parts=[]; selected=null; rebuildScene(); renderPanels(); autosave(); } };
-$('closeProfileBtn').onclick=()=>{profileClosed=true;drawProfile();}; $('undoPointBtn').onclick=()=>{profilePoints.pop();profileClosed=false;drawProfile();}; $('clearProfileBtn').onclick=()=>{profilePoints=[];profileClosed=false;drawProfile();};
-
 function resize(){ const w=host.clientWidth,h=host.clientHeight; renderer.setSize(w,h); camera.aspect=w/h; camera.updateProjectionMatrix(); }
 new ResizeObserver(resize).observe(host); resize();
 function animate(){ requestAnimationFrame(animate); orbit.update(); labels.forEach((sprite,id)=>{ const m=meshes.get(id), p=parts.find(x=>x.id===id); if(m&&p) sprite.position.set(m.position.x, m.position.y + (p.height*m.scale.y)/2 + .45, m.position.z); }); renderer.render(scene,camera); }
-animate(); drawProfile();
+animate();
 try{ const stored=localStorage.getItem('cabinRebuildProject'); if(stored) restore(stored); else renderPanels(); } catch { renderPanels(); }
 setStatusText('Ready. Everything auto-saves locally in this browser.');
