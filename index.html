@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cabin Rebuild Mapper</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <h1>Cabin Rebuild Mapper</h1>
+      <p>3D tear-down / rebuild layout with custom labels, sizes, layers, and odd-shaped logs.</p>
+    </div>
+    <div class="header-actions">
+      <button id="saveBtn">Save</button>
+      <button id="exportBtn">Export JSON</button>
+      <label class="file-btn">Import <input id="importInput" type="file" accept="application/json" /></label>
+      <button id="clearBtn" class="danger">Clear</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="panel left-panel">
+      <section class="card">
+        <h2>Add / Edit Part</h2>
+        <div class="form-grid">
+          <label>Existing Label <input id="partLabel" placeholder="A12, Wall-N-03, Nick label" /></label>
+          <label>Layer / Section <input id="partLayer" placeholder="Front Wall" value="Front Wall" /></label>
+          <label>Material <input id="partMaterial" placeholder="Lincoln log, rafter, tin" value="wood" /></label>
+          <label>Color <input id="partColor" type="color" value="#8b6b45" /></label>
+          <label>Length <input id="partLength" type="number" min="0.1" step="0.1" value="8" /></label>
+          <label>Width / Depth <input id="partDepth" type="number" min="0.1" step="0.1" value="2" /></label>
+          <label>Height <input id="partHeight" type="number" min="0.1" step="0.1" value="2" /></label>
+          <label>Units
+            <select id="partUnits">
+              <option value="ft">feet</option>
+              <option value="in">inches</option>
+            </select>
+          </label>
+          <label>Left Cut Angle <input id="leftAngle" type="number" step="1" value="0" /></label>
+          <label>Right Cut Angle <input id="rightAngle" type="number" step="1" value="0" /></label>
+        </div>
+        <label class="notes-label">Notes <textarea id="partNotes" rows="3" placeholder="Damage, orientation mark, photo ref, where it came from..."></textarea></label>
+        <div class="button-row">
+          <button id="addBlockBtn">Add 3D Block</button>
+          <button id="updatePartBtn">Update Selected</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Custom Odd Piece Pen Tool</h2>
+        <p class="hint">Tap points below to draw a side profile, then extrude it into a 3D part. Good for notched Lincoln-log ends.</p>
+        <canvas id="profileCanvas" width="320" height="190"></canvas>
+        <div class="button-row wrap">
+          <button id="closeProfileBtn">Close Shape</button>
+          <button id="undoPointBtn">Undo Point</button>
+          <button id="clearProfileBtn">Clear Points</button>
+          <button id="addCustomBtn">Extrude Custom</button>
+        </div>
+      </section>
+    </aside>
+
+    <section class="workspace">
+      <div class="toolbar">
+        <button data-mode="translate" class="mode active">Move</button>
+        <button data-mode="rotate" class="mode">Rotate</button>
+        <button data-mode="scale" class="mode">Scale</button>
+        <button id="duplicateBtn">Duplicate</button>
+        <button id="deleteBtn">Delete</button>
+        <button id="undoBtn">Undo</button>
+        <button id="redoBtn">Redo</button>
+        <button id="fastenBtn">Fasten / Group</button>
+        <span class="divider"></span>
+        <button data-view="iso" class="viewBtn">3D</button>
+        <button data-view="top" class="viewBtn">Top</button>
+        <button data-view="front" class="viewBtn">Front</button>
+        <button data-view="side" class="viewBtn">Side</button>
+      </div>
+      <div id="canvasHost"></div>
+      <div class="statusbar"><span id="statusText">Ready. Add a block or custom piece.</span></div>
+    </section>
+
+    <aside class="panel right-panel">
+      <section class="card">
+        <h2>Selected Part</h2>
+        <div id="selectedInfo" class="selected-info">Nothing selected.</div>
+      </section>
+      <section class="card">
+        <h2>Layers</h2>
+        <div id="layersList" class="layers-list"></div>
+      </section>
+      <section class="card parts-card">
+        <h2>Parts List</h2>
+        <div id="partsList" class="parts-list"></div>
+      </section>
+    </aside>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
