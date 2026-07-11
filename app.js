@@ -1,310 +1,131 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
-import { Brush, Evaluator, ADDITION, SUBTRACTION } from 'https://unpkg.com/three-bvh-csg@0.0.16/build/index.module.js';
 
-const host = document.getElementById('canvasHost');
-const statusText = document.getElementById('statusText');
-const partsList = document.getElementById('partsList');
-const layersList = document.getElementById('layersList');
-const selectedInfo = document.getElementById('selectedInfo');
+const $ = (s, root=document) => root.querySelector(s);
+const $$ = (s, root=document) => [...root.querySelectorAll(s)];
+const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
 
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x14100d);
-const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 2000);
-camera.position.set(12, 9, 12);
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-host.appendChild(renderer.domElement);
+const state = {
+  objects: [], selected: [], layers: [{name:'Front Wall', visible:true, locked:false, color:'#22c44b'}],
+  unit:'ft', zoom:42, panX:70, panY:55, snap:true, grid:0.5, undo:[], redo:[],
+  activeView:'design', measureMode:false, measurePts:[]
+};
 
-const orbit = new OrbitControls(camera, renderer.domElement);
-orbit.enableDamping = true;
-orbit.target.set(0, 1, 0);
-const transform = new TransformControls(camera, renderer.domElement);
-scene.add(transform);
-transform.addEventListener('dragging-changed', e => orbit.enabled = !e.value);
-transform.addEventListener('objectChange', () => {
-  if (selected) syncMeshToPart(selected);
-  autosave();
-  renderPanels();
-});
+const canvas = $('#designCanvas'), ctx = canvas.getContext('2d');
+const topRuler = $('#topRuler'), tr = topRuler.getContext('2d');
+const leftRuler = $('#leftRuler'), lr = leftRuler.getContext('2d');
+let drag = null;
 
-scene.add(new THREE.HemisphereLight(0xffffff, 0x4b3626, 1.8));
-const sun = new THREE.DirectionalLight(0xffffff, 2.2);
-sun.position.set(12, 20, 9);
-scene.add(sun);
-const grid = new THREE.GridHelper(80, 80, 0x8a6a3f, 0x39291d);
-scene.add(grid);
+function snapshot(){ state.undo.push(JSON.stringify({objects:state.objects,layers:state.layers})); if(state.undo.length>60)state.undo.shift(); state.redo=[]; }
+function restore(raw){ const d=JSON.parse(raw); state.objects=d.objects||[]; state.layers=d.layers||state.layers; state.selected=[]; renderAll(); }
+function saveLocal(){ localStorage.setItem('cabin-rebuild-mapper-v2', JSON.stringify({objects:state.objects,layers:state.layers,grid:state.grid,snap:state.snap})); toast('Project saved'); }
+function loadLocal(){ try{const d=JSON.parse(localStorage.getItem('cabin-rebuild-mapper-v2')); if(d){Object.assign(state,d);}}catch{} }
+function toast(msg){ $('#selectionReadout').textContent=msg; clearTimeout(toast.t); toast.t=setTimeout(updateReadout,1800); }
 
-let parts = [];
-let selected = null;
-let selectedIds = new Set();
-let history = [];
-let future = [];
-const meshes = new Map();
-const labels = new Map();
+function resize(){
+  const wrap=$('#canvasWrap'), dpr=devicePixelRatio||1;
+  canvas.width=wrap.clientWidth*dpr; canvas.height=wrap.clientHeight*dpr; canvas.style.width=wrap.clientWidth+'px'; canvas.style.height=wrap.clientHeight+'px';
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  topRuler.width=topRuler.clientWidth*dpr; topRuler.height=topRuler.clientHeight*dpr; tr.setTransform(dpr,0,0,dpr,0,0);
+  leftRuler.width=leftRuler.clientWidth*dpr; leftRuler.height=leftRuler.clientHeight*dpr; lr.setTransform(dpr,0,0,dpr,0,0);
+  render2d(); resize3d();
+}
+window.addEventListener('resize',resize);
+const worldToScreen=(x,y)=>({x:state.panX+x*state.zoom,y:state.panY+y*state.zoom});
+const screenToWorld=(x,y)=>({x:(x-state.panX)/state.zoom,y:(y-state.panY)/state.zoom});
+const snap=v=>state.snap?Math.round(v/state.grid)*state.grid:v;
 
-const uid = () => crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random());
-const $ = id => document.getElementById(id);
-const readForm = () => ({
-  label: $('partLabel').value.trim() || `Part-${parts.length + 1}`,
-  layer: $('partLayer').value.trim() || 'Unsorted',
-  material: $('partMaterial').value.trim() || 'wood',
-  color: $('partColor').value || '#8b6b45',
-  length: Math.max(parseFloat($('partLength').value) || 1, 0.1),
-  depth: Math.max(parseFloat($('partDepth').value) || 1, 0.1),
-  height: Math.max(parseFloat($('partHeight').value) || 1, 0.1),
-  units: $('partUnits').value,
-  leftAngle: parseFloat($('leftAngle').value) || 0,
-  rightAngle: parseFloat($('rightAngle').value) || 0,
-  notes: $('partNotes').value.trim()
-});
-const snapshot = () => JSON.stringify(parts);
-function pushHistory(){ history.push(snapshot()); if(history.length>80) history.shift(); future = []; }
-function restore(json){ parts = JSON.parse(json || '[]'); selected = null; selectedIds = new Set(); rebuildScene(); renderPanels(); autosave(false); }
-function autosave(setStatus=true){ localStorage.setItem('cabinRebuildProject', snapshot()); if(setStatus) setStatusText('Saved locally.'); }
-function setStatusText(text){ statusText.textContent = text; }
-function meshScaleFromPart(p){ return new THREE.Vector3(p.length, p.height, p.depth); }
+function pathFor(o,c=ctx){
+  const w=o.w*state.zoom,h=o.h*state.zoom; c.beginPath();
+  if(o.type==='circle'||o.type==='log'){c.ellipse(0,0,w/2,h/2,0,0,Math.PI*2);}
+  else if(o.type==='triangle'){c.moveTo(0,-h/2);c.lineTo(w/2,h/2);c.lineTo(-w/2,h/2);c.closePath();}
+  else if(o.type==='trapezoid'){c.moveTo(-w*.32,-h/2);c.lineTo(w*.32,-h/2);c.lineTo(w/2,h/2);c.lineTo(-w/2,h/2);c.closePath();}
+  else if(o.type==='wedge'){c.moveTo(-w/2,h/2);c.lineTo(w/2,h/2);c.lineTo(w/2,-h/2);c.closePath();}
+  else c.rect(-w/2,-h/2,w,h);
+}
+function drawObject(o){
+  const layer=state.layers.find(l=>l.name===o.layer); if(layer && !layer.visible)return;
+  const p=worldToScreen(o.x,o.y); ctx.save();ctx.translate(p.x,p.y);ctx.rotate(o.rot||0);
+  if(o.operation==='compound'){
+    for(const cid of o.children||[]){const ch=state.objects.find(x=>x.id===cid);if(!ch)continue;ctx.save();ctx.translate((ch.x-o.x)*state.zoom,(ch.y-o.y)*state.zoom);ctx.rotate((ch.rot||0)-(o.rot||0));pathFor(ch);ctx.fillStyle=o.color;ctx.fill();ctx.restore();}
+    for(const hole of o.holes||[]){ctx.save();ctx.globalCompositeOperation='destination-out';ctx.translate((hole.x-o.x)*state.zoom,(hole.y-o.y)*state.zoom);ctx.rotate((hole.rot||0)-(o.rot||0));pathFor(hole);ctx.fill();ctx.restore();}
+  } else {pathFor(o);ctx.fillStyle=o.color||'#8b6b45';ctx.fill();ctx.strokeStyle='#45494c';ctx.lineWidth=1.2;ctx.stroke();}
+  if(o.label){ctx.rotate(-(o.rot||0));ctx.fillStyle='#111';ctx.font='600 12px system-ui';ctx.textAlign='center';ctx.fillText(o.label,0,4);}
+  ctx.restore();
+  if(state.selected.includes(o.id)) drawSelection(o);
+}
+function drawSelection(o){
+  const p=worldToScreen(o.x,o.y),w=o.w*state.zoom,h=o.h*state.zoom;ctx.save();ctx.translate(p.x,p.y);ctx.rotate(o.rot||0);ctx.strokeStyle='#15958e';ctx.lineWidth=2;ctx.strokeRect(-w/2,-h/2,w,h);ctx.fillStyle='#fff';ctx.strokeStyle='#15958e';for(const [x,y] of [[-w/2,-h/2],[w/2,-h/2],[w/2,h/2],[-w/2,h/2]]){ctx.fillRect(x-5,y-5,10,10);ctx.strokeRect(x-5,y-5,10,10)}ctx.beginPath();ctx.moveTo(0,-h/2);ctx.lineTo(0,-h/2-28);ctx.stroke();ctx.beginPath();ctx.arc(0,-h/2-36,9,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.restore();
+}
+function render2d(){
+  const w=canvas.clientWidth,h=canvas.clientHeight;ctx.clearRect(0,0,w,h);ctx.fillStyle='#fff';ctx.fillRect(0,0,w,h);
+  const minor=state.zoom*state.grid, major=minor*4;ctx.lineWidth=1;
+  for(let x=((state.panX%minor)+minor)%minor;x<w;x+=minor){ctx.strokeStyle='#eef0f1';ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke()}
+  for(let y=((state.panY%minor)+minor)%minor;y<h;y+=minor){ctx.strokeStyle='#eef0f1';ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}
+  for(let x=((state.panX%major)+major)%major;x<w;x+=major){ctx.strokeStyle='#d9dcde';ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke()}
+  for(let y=((state.panY%major)+major)%major;y<h;y+=major){ctx.strokeStyle='#d9dcde';ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}
+  state.objects.filter(o=>!o.hidden&&!o.parentId).forEach(drawObject);
+  if(state.measurePts.length){ctx.fillStyle='#e64';for(const p of state.measurePts){const s=worldToScreen(p.x,p.y);ctx.beginPath();ctx.arc(s.x,s.y,5,0,Math.PI*2);ctx.fill()}}
+  drawRulers(); updateReadout();
+}
+function drawRulers(){const w=topRuler.clientWidth,h=leftRuler.clientHeight;tr.clearRect(0,0,w,32);lr.clearRect(0,0,36,h);tr.fillStyle=lr.fillStyle='#f4f5f5';tr.fillRect(0,0,w,32);lr.fillRect(0,0,36,h);tr.strokeStyle=lr.strokeStyle='#aeb3b6';tr.fillStyle=lr.fillStyle='#666';tr.font=lr.font='11px system-ui';
+  const step=state.zoom; let start=Math.floor((-state.panX)/step)-1;for(let i=start;i<start+w/step+3;i++){let x=state.panX+i*step;tr.beginPath();tr.moveTo(x,32);tr.lineTo(x,i%5===0?14:23);tr.stroke();if(i%5===0)tr.fillText(i,x+3,12)}
+  start=Math.floor((-state.panY)/step)-1;for(let i=start;i<start+h/step+3;i++){let y=state.panY+i*step;lr.beginPath();lr.moveTo(36,y);lr.lineTo(i%5===0?17:27,y);lr.stroke();if(i%5===0){lr.save();lr.translate(12,y-3);lr.rotate(-Math.PI/2);lr.fillText(i,0,0);lr.restore()}}
+}
+function hitTest(x,y){for(let i=state.objects.length-1;i>=0;i--){const o=state.objects[i];if(o.hidden||o.parentId)continue;const p=screenToWorld(x,y),dx=p.x-o.x,dy=p.y-o.y,cs=Math.cos(-(o.rot||0)),sn=Math.sin(-(o.rot||0)),lx=dx*cs-dy*sn,ly=dx*sn+dy*cs;if(Math.abs(lx)<=o.w/2&&Math.abs(ly)<=o.h/2)return o;}return null}
+function pointerPos(e){const r=canvas.getBoundingClientRect(),t=e.touches?.[0]||e;return{x:t.clientX-r.left,y:t.clientY-r.top}}
+canvas.addEventListener('pointerdown',e=>{canvas.setPointerCapture(e.pointerId);const p=pointerPos(e),world=screenToWorld(p.x,p.y);if(state.measureMode){state.measurePts.push(world);if(state.measurePts.length===2){const [a,b]=state.measurePts,d=Math.hypot(b.x-a.x,b.y-a.y);$('#measureResult')&&($('#measureResult').textContent=`${d.toFixed(3)} ${state.unit}`);state.measureMode=false;toast(`Measured ${d.toFixed(3)} ${state.unit}`)}render2d();return}const o=hitTest(p.x,p.y);if(o&&!o.locked){if(e.shiftKey||e.ctrlKey){state.selected=state.selected.includes(o.id)?state.selected.filter(id=>id!==o.id):[...state.selected,o.id]}else if(!state.selected.includes(o.id))state.selected=[o.id];snapshot();drag={start:world,orig:state.selected.map(id=>{const q=state.objects.find(o=>o.id===id);return{id,x:q.x,y:q.y}})};}else{state.selected=[];drag={pan:true,start:p,px:state.panX,py:state.panY}}render2d();});
+canvas.addEventListener('pointermove',e=>{if(!drag)return;const p=pointerPos(e);if(drag.pan){state.panX=drag.px+p.x-drag.start.x;state.panY=drag.py+p.y-drag.start.y}else{const w=screenToWorld(p.x,p.y),dx=w.x-drag.start.x,dy=w.y-drag.start.y;for(const a of drag.orig){const o=state.objects.find(x=>x.id===a.id);o.x=snap(a.x+dx);o.y=snap(a.y+dy)}}render2d();});
+canvas.addEventListener('pointerup',()=>{drag=null;renderParts();sync3d();});
+canvas.addEventListener('wheel',e=>{e.preventDefault();const p=pointerPos(e),before=screenToWorld(p.x,p.y),factor=e.deltaY<0?1.1:.9;state.zoom=Math.max(12,Math.min(160,state.zoom*factor));const after=worldToScreen(before.x,before.y);state.panX+=p.x-after.x;state.panY+=p.y-after.y;render2d()},{passive:false});
 
-function makeLabelSprite(text){
-  const canvas = document.createElement('canvas'); canvas.width = 512; canvas.height = 160;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = 'rgba(20,14,9,.82)'; ctx.roundRect(8, 25, 496, 90, 18); ctx.fill();
-  ctx.strokeStyle = '#d9ad5f'; ctx.lineWidth = 6; ctx.stroke();
-  ctx.fillStyle = '#f2e6cf'; ctx.font = 'bold 48px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(text.slice(0, 22), 256, 70);
-  const texture = new THREE.CanvasTexture(canvas);
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map:texture, transparent:true, depthTest:false }));
-  sprite.scale.set(2.6, .8, 1); return sprite;
-}
+function addObject(type='rect',data={}){snapshot();const i=state.objects.length+1,o={id:uid(),type,label:data.label||`P-${String(i).padStart(3,'0')}`,x:data.x??4,y:data.y??4,w:+(data.w??4),h:+(data.h??1),depth:+(data.depth??1),rot:0,color:data.color||'#8b6b45',material:data.material||'Wood',layer:data.layer||'Front Wall',notes:data.notes||'',unit:data.unit||state.unit,hidden:false,locked:false};state.objects.push(o);state.selected=[o.id];renderAll();return o}
+function selectedObjects(){return state.selected.map(id=>state.objects.find(o=>o.id===id)).filter(Boolean)}
+function duplicate(){const sel=selectedObjects();if(!sel.length)return;snapshot();state.selected=[];for(const o of sel){const n={...structuredClone(o),id:uid(),x:o.x+.5,y:o.y+.5,label:o.label+' copy'};delete n.parentId;state.objects.push(n);state.selected.push(n.id)}renderAll()}
+function removeSelected(){if(!state.selected.length)return;snapshot();state.objects=state.objects.filter(o=>!state.selected.includes(o.id));state.selected=[];renderAll()}
+function booleanOp(op){const sel=selectedObjects();if(sel.length<2){toast('Select at least two objects');return}snapshot();const base=sel[0], rest=sel.slice(1);if(op==='subtract'){base.operation='compound';base.children=base.children||[base.id];base.holes=[...(base.holes||[]),...rest.map(r=>structuredClone(r))];state.objects=state.objects.filter(o=>!rest.includes(o));state.selected=[base.id];toast('Subtracted from primary object');}
+else{const minX=Math.min(...sel.map(o=>o.x-o.w/2)),maxX=Math.max(...sel.map(o=>o.x+o.w/2)),minY=Math.min(...sel.map(o=>o.y-o.h/2)),maxY=Math.max(...sel.map(o=>o.y+o.h/2));const n={...structuredClone(base),id:uid(),x:(minX+maxX)/2,y:(minY+maxY)/2,w:maxX-minX,h:maxY-minY,operation:'compound',children:sel.map(o=>o.id),holes:[],label:`${op.toUpperCase()}-${base.label}`};for(const o of sel)o.parentId=n.id;state.objects.push(n);state.selected=[n.id];toast(`${op} created`)}renderAll()}
+function group(){const sel=selectedObjects();if(sel.length<2)return toast('Select multiple parts first');snapshot();const gid=uid();sel.forEach(o=>o.groupId=gid);toast('Parts fastened/grouped');renderAll()}
+function applyMaterial(name,color){selectedObjects().forEach(o=>{o.material=name;o.color=color});renderAll()}
 
-function makeGeometry(p){
-  if(p.shape === 'boolean' && p.geometry){
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(p.geometry.positions, 3));
-    geo.setAttribute('normal', new THREE.Float32BufferAttribute(p.geometry.normals, 3));
-    if(p.geometry.index) geo.setIndex(p.geometry.index);
-    geo.computeVertexNormals();
-    geo.computeBoundingBox();
-    geo.computeBoundingSphere();
-    return geo;
-  }
-  if(p.shape === 'custom' && p.profile?.length > 2){
-    const shape = new THREE.Shape();
-    p.profile.forEach((pt, i) => i ? shape.lineTo(pt.x, pt.y) : shape.moveTo(pt.x, pt.y));
-    shape.closePath();
-    const geo = new THREE.ExtrudeGeometry(shape, { depth:p.depth, bevelEnabled:false });
-    geo.center();
-    geo.scale(p.length, p.height, 1);
-    return geo;
-  }
-  return new THREE.BoxGeometry(p.length, p.height, p.depth);
+const panelTemplates={shapes:'shapePanelTemplate',parts:'partsPanelTemplate',labels:'labelsPanelTemplate',layers:'layersPanelTemplate',materials:'materialsPanelTemplate',settings:'settingsPanelTemplate',measure:'measurePanelTemplate'};
+function openPanel(name){const id=panelTemplates[name];if(!id)return;$('#sheetTitle').textContent=name[0].toUpperCase()+name.slice(1);$('#sheetContent').innerHTML='';$('#sheetContent').append($('#'+id).content.cloneNode(true));$('#toolSheet').classList.add('open');$('#sheetBackdrop').classList.add('open');$('#toolSheet').setAttribute('aria-hidden','false');$$('.bottom-toolbar button').forEach(b=>b.classList.toggle('active',b.dataset.panel===name));wirePanel(name)}
+function closePanel(){$('#toolSheet').classList.remove('open');$('#sheetBackdrop').classList.remove('open');$('#toolSheet').setAttribute('aria-hidden','true');$$('.bottom-toolbar button').forEach(b=>b.classList.remove('active'))}
+function wirePanel(name){
+ if(name==='shapes')$$('[data-shape]',$('#sheetContent')).forEach(b=>b.onclick=()=>{const map={rect:[4,1],beam:[6,.5],log:[4,1],triangle:[3,3],trapezoid:[4,2],circle:[2,2],wedge:[3,2],panel:[4,4]};addObject(b.dataset.shape,{w:map[b.dataset.shape][0],h:map[b.dataset.shape][1]});closePanel()});
+ if(name==='parts')$('#addPartBtn').onclick=()=>{const unit=$('#partUnits').value;state.unit=unit;addObject('rect',{label:$('#partLabel').value||undefined,w:+$('#partLength').value,h:+$('#partHeight').value,depth:+$('#partDepth').value,layer:$('#partLayer').value||'Unassigned',material:$('#partMaterial').value||'Wood',color:$('#partColor').value,notes:$('#partNotes').value,unit});ensureLayer($('#partLayer').value||'Unassigned');closePanel()};
+ if(name==='labels'){const o=selectedObjects()[0];$('#editLabel').value=o?.label||'';$('#editNotes').value=o?.notes||'';$('#applyLabelBtn').onclick=()=>{selectedObjects().forEach(x=>{x.label=$('#editLabel').value;x.notes=$('#editNotes').value});renderAll();closePanel()}}
+ if(name==='layers'){renderLayerPanel();$('#addLayerBtn').onclick=()=>{const n=prompt('Layer name');if(n){ensureLayer(n);renderLayerPanel();renderAll()}}}
+ if(name==='materials'){$$('[data-material]',$('#sheetContent')).forEach(b=>b.onclick=()=>{applyMaterial(b.dataset.material,b.dataset.color);closePanel()});$('#customMaterialColor').oninput=e=>applyMaterial('Custom',e.target.value)}
+ if(name==='settings'){ $('#duplicateBtn').onclick=duplicate;$('#deleteBtn').onclick=removeSelected;$('#groupBtn').onclick=group;$('#ungroupBtn').onclick=()=>{selectedObjects().forEach(o=>delete o.groupId);renderAll()};$('#uniteBtn').onclick=()=>booleanOp('unite');$('#subtractBtn').onclick=()=>booleanOp('subtract');$('#intersectBtn').onclick=()=>booleanOp('intersect');$('#excludeBtn').onclick=()=>booleanOp('exclude');$('#lockBtn').onclick=()=>{selectedObjects().forEach(o=>o.locked=!o.locked);renderAll()};$('#hideBtn').onclick=()=>{selectedObjects().forEach(o=>o.hidden=true);state.selected=[];renderAll()};$('#snapToggle').checked=state.snap;$('#snapToggle').onchange=e=>state.snap=e.target.checked;$('#gridSize').value=state.grid;$('#gridSize').onchange=e=>{state.grid=+e.target.value;render2d()};$('#clearProjectBtn').onclick=()=>{if(confirm('Clear the entire project?')){snapshot();state.objects=[];state.selected=[];renderAll();closePanel()}} }
+ if(name==='measure')$('#measureModeBtn').onclick=()=>{state.measureMode=true;state.measurePts=[];closePanel();toast('Tap two points to measure')};
 }
-function createMesh(p){
-  const mat = new THREE.MeshStandardMaterial({ color:p.color, roughness:.72, metalness:.04 });
-  const mesh = new THREE.Mesh(makeGeometry(p), mat);
-  mesh.userData.id = p.id;
-  mesh.position.fromArray(p.position || [0, p.height/2, 0]);
-  mesh.rotation.fromArray(p.rotation || [0,0,0]);
-  mesh.scale.fromArray(p.scale || [1,1,1]);
-  scene.add(mesh); meshes.set(p.id, mesh);
-  const sprite = makeLabelSprite(p.label);
-  sprite.position.set(mesh.position.x, mesh.position.y + p.height/2 + .45, mesh.position.z);
-  scene.add(sprite); labels.set(p.id, sprite);
-  return mesh;
-}
-function clearSceneParts(){ meshes.forEach(m=>{scene.remove(m); m.geometry.dispose(); m.material.dispose();}); labels.forEach(l=>scene.remove(l)); meshes.clear(); labels.clear(); transform.detach(); }
-function rebuildScene(){ clearSceneParts(); parts.forEach(p => createMesh(p)); updateVisibility(); }
-function syncMeshToPart(p){
-  const mesh = meshes.get(p.id); if(!mesh) return;
-  p.position = mesh.position.toArray(); p.rotation = [mesh.rotation.x, mesh.rotation.y, mesh.rotation.z]; p.scale = mesh.scale.toArray();
-  const label = labels.get(p.id); if(label) label.position.set(mesh.position.x, mesh.position.y + (p.height * mesh.scale.y)/2 + .45, mesh.position.z);
-}
-function highlightSelection(){
-  parts.forEach(p => {
-    const mesh = meshes.get(p.id);
-    if(mesh?.material){
-      mesh.material.emissive = new THREE.Color(selectedIds.has(p.id) ? 0x6b4a1e : 0x000000);
-      mesh.material.emissiveIntensity = selectedIds.has(p.id) ? 0.35 : 0;
-    }
-  });
-}
-function selectPart(id, append=false){
-  const part = parts.find(p => p.id === id) || null;
-  if(!part){ selected = null; selectedIds.clear(); transform.detach(); renderPanels(); return; }
-  if(append){
-    if(selectedIds.has(id) && selectedIds.size > 1) selectedIds.delete(id);
-    else selectedIds.add(id);
-  } else {
-    selectedIds = new Set([id]);
-  }
-  selected = parts.find(p => p.id === id) || [...selectedIds].map(x=>parts.find(p=>p.id===x)).filter(Boolean).at(-1) || null;
-  if(selectedIds.size === 1 && selected){ transform.attach(meshes.get(selected.id)); fillForm(selected); }
-  else { transform.detach(); if(selected) fillForm(selected); }
-  highlightSelection();
-  setStatusText(selectedIds.size > 1 ? `${selectedIds.size} parts selected.` : `Selected ${selected.label}`);
-  renderPanels();
-}
-function fillForm(p){
-  $('partLabel').value=p.label; $('partLayer').value=p.layer; $('partMaterial').value=p.material; $('partColor').value=p.color;
-  $('partLength').value=p.length; $('partDepth').value=p.depth; $('partHeight').value=p.height; $('partUnits').value=p.units || 'ft';
-  $('leftAngle').value=p.leftAngle || 0; $('rightAngle').value=p.rightAngle || 0; $('partNotes').value=p.notes || '';
-}
-function addPart(shape='block'){
-  pushHistory();
-  const data = readForm();
-  const p = { id:uid(), shape, ...data, position:[0, data.height/2, 0], rotation:[0,0,0], scale:[1,1,1], fastenedTo:null };
-  if(shape === 'custom') p.profile = normalizeProfile();
-  parts.push(p); createMesh(p); selectPart(p.id); renderPanels(); autosave();
-}
-function updateSelected(){
-  if(!selected) return setStatusText('Select a part first.');
-  pushHistory();
-  const data = readForm(); Object.assign(selected, data);
-  const mesh = meshes.get(selected.id); const oldPos = mesh.position.toArray(); const oldRot = [mesh.rotation.x,mesh.rotation.y,mesh.rotation.z]; const oldScale = mesh.scale.toArray();
-  scene.remove(mesh); mesh.geometry.dispose(); mesh.material.dispose(); meshes.delete(selected.id);
-  const oldLabel = labels.get(selected.id); if(oldLabel) scene.remove(oldLabel); labels.delete(selected.id);
-  selected.position = oldPos; selected.rotation = oldRot; selected.scale = oldScale;
-  createMesh(selected); selectPart(selected.id); renderPanels(); autosave(); setStatusText('Selected part updated.');
-}
-function duplicateSelected(){
-  if(!selectedIds.size) return;
-  pushHistory();
-  const copies = parts.filter(p=>selectedIds.has(p.id)).map(p=>{
-    const copy = JSON.parse(JSON.stringify(p));
-    copy.id = uid(); copy.label = `${copy.label}-copy`; copy.position[0]+=1; copy.position[2]+=1;
-    return copy;
-  });
-  parts.push(...copies); copies.forEach(createMesh); selectedIds = new Set(copies.map(p=>p.id)); selected = copies.at(-1);
-  if(copies.length === 1) transform.attach(meshes.get(selected.id)); else transform.detach();
-  highlightSelection(); renderPanels(); autosave(); setStatusText(`${copies.length} part(s) duplicated.`);
-}
-function deleteSelected(){
-  if(!selectedIds.size) return;
-  pushHistory(); const count = selectedIds.size; parts = parts.filter(p=>!selectedIds.has(p.id)); selected=null; selectedIds.clear(); rebuildScene(); renderPanels(); autosave(); setStatusText(`${count} part(s) deleted.`);
-}
+function ensureLayer(name){if(!state.layers.some(l=>l.name===name))state.layers.push({name,visible:true,locked:false,color:`hsl(${Math.random()*360} 60% 50%)`})}
+function renderLayerPanel(){const host=$('#layerPanelList');if(!host)return;host.innerHTML=state.layers.map((l,i)=>`<div class="layer-row"><input type="checkbox" data-vis="${i}" ${l.visible?'checked':''}><span><i class="layer-dot" style="background:${l.color};display:inline-block;margin-right:7px"></i>${l.name}</span><button data-lock="${i}">${l.locked?'🔒':'🔓'}</button></div>`).join('');$$('[data-vis]',host).forEach(x=>x.onchange=()=>{state.layers[+x.dataset.vis].visible=x.checked;renderAll()});$$('[data-lock]',host).forEach(x=>x.onclick=()=>{const l=state.layers[+x.dataset.lock];l.locked=!l.locked;state.objects.filter(o=>o.layer===l.name).forEach(o=>o.locked=l.locked);renderLayerPanel();renderAll()})}
+function updateReadout(){const s=selectedObjects();if(!s.length)$('#selectionReadout').textContent='Cabin Rebuild Mapper';else if(s.length===1){const o=s[0];$('#selectionReadout').textContent=`${o.w.toFixed(3)} × ${o.h.toFixed(3)} ${o.unit||state.unit}   X:${o.x.toFixed(3)} Y:${o.y.toFixed(3)}`}else $('#selectionReadout').textContent=`${s.length} objects selected`}
+function renderParts(){const q=($('#partsSearch')?.value||'').toLowerCase();const rows=state.objects.filter(o=>!o.parentId).filter(o=>`${o.label} ${o.layer} ${o.material}`.toLowerCase().includes(q));$('#partsTable').innerHTML=rows.length?rows.map(o=>`<article class="part-card" data-id="${o.id}"><h3>${o.label||'Unlabeled part'}</h3><div class="part-meta"><span>${o.w} × ${o.h} × ${o.depth} ${o.unit||state.unit}</span><span>${o.material}</span><span>${o.layer}</span><span>${o.hidden?'Hidden':''}${o.locked?' Locked':''}</span></div>${o.notes?`<p>${o.notes}</p>`:''}</article>`).join(''):'<p>No parts yet.</p>';$$('.part-card').forEach(c=>c.onclick=()=>{state.selected=[c.dataset.id];switchView('design');renderAll()})}
 
-function worldBrushFromPart(p){
-  const mesh = meshes.get(p.id);
-  if(!mesh) return null;
-  mesh.updateMatrixWorld(true);
-  const geo = mesh.geometry.clone();
-  geo.applyMatrix4(mesh.matrixWorld);
-  geo.computeVertexNormals();
-  const mat = new THREE.MeshStandardMaterial({ color:p.color, roughness:.72, metalness:.04 });
-  const brush = new Brush(geo, mat);
-  brush.updateMatrixWorld(true);
-  return brush;
-}
-function geometryPayload(geo){
-  geo = geo.toNonIndexed();
-  geo.computeVertexNormals();
-  return {
-    positions: Array.from(geo.attributes.position.array),
-    normals: Array.from(geo.attributes.normal.array)
-  };
-}
-function addBooleanResult(resultMesh, label, sourceParts){
-  resultMesh.geometry.computeBoundingBox();
-  const box = resultMesh.geometry.boundingBox;
-  const size = new THREE.Vector3(); box.getSize(size);
-  const center = new THREE.Vector3(); box.getCenter(center);
-  const primary = sourceParts[0];
-  const p = {
-    id: uid(), shape: 'boolean', label, layer: primary.layer, material: primary.material,
-    color: primary.color, length: Number(size.x.toFixed(3)) || primary.length,
-    height: Number(size.y.toFixed(3)) || primary.height, depth: Number(size.z.toFixed(3)) || primary.depth,
-    units: primary.units || 'ft', leftAngle: 0, rightAngle: 0,
-    notes: `Custom shape made from: ${sourceParts.map(x=>x.label).join(', ')}`,
-    position:[0,0,0], rotation:[0,0,0], scale:[1,1,1], fastenedTo:null,
-    geometry: geometryPayload(resultMesh.geometry)
-  };
-  parts = parts.filter(x=>!selectedIds.has(x.id));
-  parts.push(p);
-  rebuildScene();
-  selectPart(p.id);
-  renderPanels(); autosave();
-  return p;
-}
-function mergeSelected(){
-  const chosen = parts.filter(p=>selectedIds.has(p.id));
-  if(chosen.length < 2) return setStatusText('Select at least 2 parts to merge.');
-  pushHistory();
-  try{
-    const evaluator = new Evaluator();
-    let result = worldBrushFromPart(chosen[0]);
-    for(const p of chosen.slice(1)) result = evaluator.evaluate(result, worldBrushFromPart(p), ADDITION);
-    const made = addBooleanResult(result, `${chosen[0].label}-merged`, chosen);
-    setStatusText(`Merged ${chosen.length} pieces into ${made.label}.`);
-  }catch(err){ console.error(err); setStatusText('Merge failed. Try using simpler overlapping block shapes.'); }
-}
-function subtractSelected(){
-  const chosen = parts.filter(p=>selectedIds.has(p.id));
-  if(chosen.length < 2 || !selected) return setStatusText('Select the main part first, then Shift-click cutter parts.');
-  const primary = selected;
-  const cutters = chosen.filter(p=>p.id !== primary.id);
-  pushHistory();
-  try{
-    const evaluator = new Evaluator();
-    let result = worldBrushFromPart(primary);
-    for(const cutter of cutters) result = evaluator.evaluate(result, worldBrushFromPart(cutter), SUBTRACTION);
-    const made = addBooleanResult(result, `${primary.label}-cut`, [primary, ...cutters]);
-    setStatusText(`Subtracted ${cutters.length} cutter piece(s) from ${primary.label}.`);
-  }catch(err){ console.error(err); setStatusText('Subtract failed. Try making cutter blocks overlap clearly through the target part.'); }
-}
-function fastenSelected(){ if(!selected) return; pushHistory(); selected.fastenedTo = selected.layer; autosave(); renderPanels(); setStatusText(`${selected.label} fastened/grouped to ${selected.layer}.`); }
-function updateVisibility(){
-  const visibleLayers = getVisibleLayers();
-  parts.forEach(p=>{ const show = visibleLayers[p.layer] !== false; const m=meshes.get(p.id), l=labels.get(p.id); if(m) m.visible=show; if(l) l.visible=show; });
-}
-function getVisibleLayers(){ return JSON.parse(localStorage.getItem('cabinRebuildLayers') || '{}'); }
-function setLayerVisible(layer, visible){ const state=getVisibleLayers(); state[layer]=visible; localStorage.setItem('cabinRebuildLayers', JSON.stringify(state)); updateVisibility(); }
-function renderPanels(){
-  if(selectedIds.size > 1){
-    const chosen = parts.filter(p=>selectedIds.has(p.id));
-    selectedInfo.innerHTML = `<div><strong>${chosen.length} parts selected</strong></div><div class="meta">Primary: ${selected?.label || 'none'}</div><div class="meta">Use Merge to combine, or Subtract to cut all other selected pieces out of the primary.</div>`;
-  } else if(selected){
-    selectedInfo.innerHTML = `<div><strong>${selected.label}</strong></div><div>${selected.length} × ${selected.depth} × ${selected.height} ${selected.units||'ft'}</div><div><span class="pill">${selected.layer}</span><span class="pill">${selected.material}</span><span class="pill">${selected.shape}</span></div><div class="meta">Cuts: L ${selected.leftAngle||0}° / R ${selected.rightAngle||0}°</div><div class="meta">${selected.notes||'No notes.'}</div>`;
-  } else selectedInfo.textContent = 'Nothing selected.';
-  partsList.innerHTML = parts.map(p=>`<div class="part-row ${selectedIds.has(p.id)?'selected':''}" data-id="${p.id}"><strong>${p.label}</strong><div class="meta">${p.length}×${p.depth}×${p.height} ${p.units||'ft'} • ${p.layer} • ${p.material}</div></div>`).join('') || '<div class="meta">No parts yet.</div>';
-  document.querySelectorAll('.part-row').forEach(row=>row.onclick=(e)=>selectPart(row.dataset.id, e.shiftKey || e.ctrlKey || e.metaKey));
-  const layers = [...new Set(parts.map(p=>p.layer))]; const state = getVisibleLayers();
-  layersList.innerHTML = layers.map(layer=>`<label class="layer-row"><span>${layer}</span><input type="checkbox" data-layer="${layer}" ${state[layer]===false?'':'checked'} /></label>`).join('') || '<div class="meta">No layers yet.</div>';
-  document.querySelectorAll('.layer-row input').forEach(cb=>cb.onchange=()=>setLayerVisible(cb.dataset.layer, cb.checked));
-}
+let renderer,scene,camera,controls,transform,meshMap=new Map();
+function init3d(){const host=$('#threeHost');renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));host.append(renderer.domElement);scene=new THREE.Scene();scene.background=new THREE.Color(0xd8dcdf);camera=new THREE.PerspectiveCamera(45,1,.1,500);camera.position.set(13,11,13);controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;scene.add(new THREE.HemisphereLight(0xffffff,0x56606a,2.5));const dl=new THREE.DirectionalLight(0xffffff,2);dl.position.set(8,15,10);scene.add(dl);const grid=new THREE.GridHelper(40,40,0x8c9499,0xbac0c4);scene.add(grid);transform=new TransformControls(camera,renderer.domElement);transform.addEventListener('dragging-changed',e=>controls.enabled=!e.value);transform.addEventListener('objectChange',()=>{const mesh=transform.object;if(!mesh)return;const o=state.objects.find(x=>x.id===mesh.userData.id);if(o){o.x=mesh.position.x;o.y=mesh.position.z;o.depth=Math.max(.01,mesh.scale.y*mesh.geometry.parameters.height);o.rot=-mesh.rotation.y;render2d();renderParts()}});scene.add(transform);renderer.domElement.addEventListener('pointerdown',pick3d);animate3d();resize3d()}
+function shapeGeometry(o){if(o.type==='circle'||o.type==='log')return new THREE.CylinderGeometry(o.w/2,o.w/2,o.depth,32);return new THREE.BoxGeometry(o.w,o.depth,o.h)}
+function sync3d(){if(!scene)return;for(const m of meshMap.values())scene.remove(m);meshMap.clear();for(const o of state.objects.filter(x=>!x.hidden&&!x.parentId)){const mat=new THREE.MeshStandardMaterial({color:o.color||'#8b6b45',roughness:.8});const mesh=new THREE.Mesh(shapeGeometry(o),mat);mesh.position.set(o.x,o.depth/2,o.y);mesh.rotation.y=-(o.rot||0);mesh.userData.id=o.id;scene.add(mesh);meshMap.set(o.id,mesh)}const selected=selectedObjects()[0];if(selected&&meshMap.has(selected.id))transform.attach(meshMap.get(selected.id));else transform.detach()}
+function pick3d(e){const r=renderer.domElement.getBoundingClientRect(),mouse=new THREE.Vector2((e.clientX-r.left)/r.width*2-1,-((e.clientY-r.top)/r.height)*2+1),ray=new THREE.Raycaster();ray.setFromCamera(mouse,camera);const hit=ray.intersectObjects([...meshMap.values()])[0];if(hit){state.selected=[hit.object.userData.id];transform.attach(hit.object);render2d();updateReadout()}}
+function animate3d(){requestAnimationFrame(animate3d);controls?.update();renderer?.render(scene,camera)}
+function resize3d(){if(!renderer)return;const host=$('#threeHost'),w=host.clientWidth||1,h=host.clientHeight||1;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix()}
+function fit3d(){if(!state.objects.length)return;const box=new THREE.Box3();for(const m of meshMap.values())box.expandByObject(m);const size=box.getSize(new THREE.Vector3()).length(),center=box.getCenter(new THREE.Vector3());controls.target.copy(center);camera.position.copy(center).add(new THREE.Vector3(size*.8,size*.65,size*.8));camera.lookAt(center)}
 
-const raycaster = new THREE.Raycaster(); const pointer = new THREE.Vector2();
-renderer.domElement.addEventListener('pointerdown', ev => {
-  const rect = renderer.domElement.getBoundingClientRect();
-  pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1; pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
-  raycaster.setFromCamera(pointer, camera);
-  const hits = raycaster.intersectObjects([...meshes.values()], false);
-  if(hits[0]) selectPart(hits[0].object.userData.id, ev.shiftKey || ev.ctrlKey || ev.metaKey);
-  else if(!ev.shiftKey && !ev.ctrlKey && !ev.metaKey){ selected=null; selectedIds.clear(); transform.detach(); highlightSelection(); renderPanels(); }
-});
+function switchView(v){state.activeView=v;$$('.view').forEach(x=>x.classList.toggle('active',x.id===`${v}View`));$$('.view-tab').forEach(x=>x.classList.toggle('active',x.dataset.view===v));if(v==='assembly'){sync3d();setTimeout(resize3d,30)}if(v==='parts')renderParts()}
+function renderAll(){render2d();renderParts();sync3d();}
 
-function setView(view){
-  const dist = 22;
-  if(view==='top') camera.position.set(0,dist,0.01);
-  if(view==='front') camera.position.set(0,6,dist);
-  if(view==='side') camera.position.set(dist,6,0);
-  if(view==='iso') camera.position.set(12,9,12);
-  orbit.target.set(0,1,0); orbit.update();
-}
+$$('.bottom-toolbar button').forEach(b=>b.onclick=()=>openPanel(b.dataset.panel));$('#closeSheet').onclick=closePanel;$('#sheetBackdrop').onclick=closePanel;
+$$('.view-tab').forEach(b=>b.onclick=()=>switchView(b.dataset.view));$('#processBtn').onclick=()=>switchView(state.activeView==='assembly'?'design':'assembly');
+$('#saveBtn').onclick=saveLocal;$('#undoBtn').onclick=()=>{if(!state.undo.length)return;state.redo.push(JSON.stringify({objects:state.objects,layers:state.layers}));restore(state.undo.pop())};$('#redoBtn').onclick=()=>{if(!state.redo.length)return;state.undo.push(JSON.stringify({objects:state.objects,layers:state.layers}));restore(state.redo.pop())};
+$('#centerBtn').onclick=()=>{state.panX=70;state.panY=55;state.zoom=42;render2d()};$('#backBtn').onclick=()=>history.length>1?history.back():toast('Project stays saved on this device');
+$('#partsSearch').oninput=renderParts;$('#exportBtn').onclick=()=>{const blob=new Blob([JSON.stringify({version:2,objects:state.objects,layers:state.layers},null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='cabin-rebuild-project.json';a.click();URL.revokeObjectURL(a.href)};
+$('#importInput').onchange=async e=>{try{snapshot();const d=JSON.parse(await e.target.files[0].text());state.objects=d.objects||[];state.layers=d.layers||state.layers;renderAll();saveLocal()}catch{alert('That project file could not be read.')}};
+$$('.three-tools [data-mode]').forEach(b=>b.onclick=()=>{$$('.three-tools [data-mode]').forEach(x=>x.classList.remove('active'));b.classList.add('active');transform.setMode(b.dataset.mode)});$('#fit3dBtn').onclick=fit3d;
 
-$('addBlockBtn').onclick=()=>addPart('block'); $('updatePartBtn').onclick=updateSelected;
-$('duplicateBtn').onclick=duplicateSelected; $('mergeBtn').onclick=mergeSelected; $('subtractBtn').onclick=subtractSelected; $('mergePanelBtn').onclick=mergeSelected; $('subtractPanelBtn').onclick=subtractSelected; $('deleteBtn').onclick=deleteSelected; $('fastenBtn').onclick=fastenSelected;
-$('undoBtn').onclick=()=>{ if(!history.length) return; future.push(snapshot()); restore(history.pop()); };
-$('redoBtn').onclick=()=>{ if(!future.length) return; history.push(snapshot()); restore(future.pop()); };
-document.querySelectorAll('.mode').forEach(btn=>btn.onclick=()=>{ document.querySelectorAll('.mode').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); transform.setMode(btn.dataset.mode); });
-document.querySelectorAll('.viewBtn').forEach(btn=>btn.onclick=()=>setView(btn.dataset.view));
-$('saveBtn').onclick=()=>autosave();
-$('exportBtn').onclick=()=>{ const blob=new Blob([JSON.stringify({version:1,parts},null,2)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='cabin-rebuild-project.json'; a.click(); URL.revokeObjectURL(a.href); };
-$('importInput').onchange=e=>{ const file=e.target.files[0]; if(!file)return; const reader=new FileReader(); reader.onload=()=>{ pushHistory(); const data=JSON.parse(reader.result); parts=data.parts||data||[]; rebuildScene(); renderPanels(); autosave(); }; reader.readAsText(file); };
-$('clearBtn').onclick=()=>{ if(confirm('Clear this project from the app? Export first if needed.')){ pushHistory(); parts=[]; selected=null; rebuildScene(); renderPanels(); autosave(); } };
-function resize(){ const w=host.clientWidth,h=host.clientHeight; renderer.setSize(w,h); camera.aspect=w/h; camera.updateProjectionMatrix(); }
-new ResizeObserver(resize).observe(host); resize();
-function animate(){ requestAnimationFrame(animate); orbit.update(); labels.forEach((sprite,id)=>{ const m=meshes.get(id), p=parts.find(x=>x.id===id); if(m&&p) sprite.position.set(m.position.x, m.position.y + (p.height*m.scale.y)/2 + .45, m.position.z); }); renderer.render(scene,camera); }
-animate();
-try{ const stored=localStorage.getItem('cabinRebuildProject'); if(stored) restore(stored); else renderPanels(); } catch { renderPanels(); }
-setStatusText('Ready. Everything auto-saves locally in this browser.');
+document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='d'){e.preventDefault();duplicate()}if(e.key==='Delete'||e.key==='Backspace'){if(!['INPUT','TEXTAREA'].includes(document.activeElement.tagName))removeSelected()}if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();saveLocal()}});
+
+loadLocal();init3d();resize();renderAll();

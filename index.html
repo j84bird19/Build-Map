@@ -2,108 +2,142 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#19181d" />
   <title>Cabin Rebuild Mapper</title>
   <link rel="stylesheet" href="styles.css" />
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/"
-    }
-  }
-  </script>
+  <script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.161.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.161.0/examples/jsm/"}}</script>
 </head>
 <body>
-  <header class="app-header">
-    <div>
-      <h1>Cabin Rebuild Mapper</h1>
-      <p>3D tear-down / rebuild layout with custom labels, sizes, layers, and odd-shaped logs.</p>
+  <header class="topbar">
+    <button class="icon-btn" id="backBtn" aria-label="Back">←</button>
+    <div class="undo-group">
+      <button class="icon-btn" id="undoBtn" aria-label="Undo">↶</button>
+      <span></span>
+      <button class="icon-btn" id="redoBtn" aria-label="Redo">↷</button>
     </div>
-    <div class="header-actions">
-      <button id="saveBtn">Save</button>
-      <button id="exportBtn">Export JSON</button>
-      <label class="file-btn">Import <input id="importInput" type="file" accept="application/json" /></label>
-      <button id="clearBtn" class="danger">Clear</button>
-    </div>
+    <div id="selectionReadout" class="selection-readout">Cabin Rebuild Mapper</div>
+    <button class="save-btn" id="saveBtn">Save</button>
+    <button class="process-btn" id="processBtn">3D View</button>
   </header>
 
-  <main class="layout">
-    <aside class="panel left-panel">
-      <section class="card">
-        <h2>Add / Edit Part</h2>
-        <div class="form-grid">
-          <label>Existing Label <input id="partLabel" placeholder="A12, Wall-N-03, Nick label" /></label>
-          <label>Layer / Section <input id="partLayer" placeholder="Front Wall" value="Front Wall" /></label>
-          <label>Material <input id="partMaterial" placeholder="Lincoln log, rafter, tin" value="wood" /></label>
-          <label>Color <input id="partColor" type="color" value="#8b6b45" /></label>
-          <label>Length <input id="partLength" type="number" min="0.1" step="0.1" value="8" /></label>
-          <label>Width / Depth <input id="partDepth" type="number" min="0.1" step="0.1" value="2" /></label>
-          <label>Height <input id="partHeight" type="number" min="0.1" step="0.1" value="2" /></label>
-          <label>Units
-            <select id="partUnits">
-              <option value="ft">feet</option>
-              <option value="in">inches</option>
-            </select>
-          </label>
-          <label>Left Cut Angle <input id="leftAngle" type="number" step="1" value="0" /></label>
-          <label>Right Cut Angle <input id="rightAngle" type="number" step="1" value="0" /></label>
-        </div>
-        <label class="notes-label">Notes <textarea id="partNotes" rows="3" placeholder="Damage, orientation mark, photo ref, where it came from..."></textarea></label>
-        <div class="button-row">
-          <button id="addBlockBtn">Add 3D Block</button>
-          <button id="updatePartBtn">Update Selected</button>
-        </div>
-      </section>
+  <div class="view-tabs" role="tablist">
+    <button class="view-tab active" data-view="design">2D Design</button>
+    <button class="view-tab" data-view="assembly">3D Assembly</button>
+    <button class="view-tab" data-view="parts">Parts List</button>
+  </div>
 
-      <section class="card">
-        <h2>xTool-style Shape Builder</h2>
-        <p class="hint">Build odd cabin logs by stacking simple blocks, then Shift-click multiple pieces and use Merge or Subtract. Subtract cuts every other selected part out of the primary selected part.</p>
-        <div class="button-row wrap">
-          <button id="mergePanelBtn">Merge Selected</button>
-          <button id="subtractPanelBtn">Subtract From Primary</button>
-        </div>
-        <p class="hint"><strong>Field workflow:</strong> add temporary cutter blocks, position/rotate them where the notch should be, select the log first, Shift-click cutter blocks, then Subtract.</p>
-      </section>
-    </aside>
-
-    <section class="workspace">
-      <div class="toolbar">
-        <button data-mode="translate" class="mode active">Move</button>
-        <button data-mode="rotate" class="mode">Rotate</button>
-        <button data-mode="scale" class="mode">Scale</button>
-        <button id="duplicateBtn">Duplicate</button>
-        <button id="mergeBtn">Merge</button>
-        <button id="subtractBtn">Subtract</button>
-        <button id="deleteBtn">Delete</button>
-        <button id="undoBtn">Undo</button>
-        <button id="redoBtn">Redo</button>
-        <button id="fastenBtn">Fasten / Group</button>
-        <span class="divider"></span>
-        <button data-view="iso" class="viewBtn">3D</button>
-        <button data-view="top" class="viewBtn">Top</button>
-        <button data-view="front" class="viewBtn">Front</button>
-        <button data-view="side" class="viewBtn">Side</button>
+  <main>
+    <section id="designView" class="view active">
+      <div class="ruler-corner"></div>
+      <canvas id="topRuler" class="top-ruler"></canvas>
+      <canvas id="leftRuler" class="left-ruler"></canvas>
+      <div id="canvasWrap" class="canvas-wrap">
+        <canvas id="designCanvas"></canvas>
       </div>
-      <div id="canvasHost"></div>
-      <div class="statusbar"><span id="statusText">Ready. Shift-click parts to multi-select. Merge or Subtract custom shapes.</span></div>
+      <button id="centerBtn" class="center-btn" title="Center design">⌖</button>
     </section>
 
-    <aside class="panel right-panel">
-      <section class="card">
-        <h2>Selected Part</h2>
-        <div id="selectedInfo" class="selected-info">Nothing selected.</div>
-      </section>
-      <section class="card">
-        <h2>Layers</h2>
-        <div id="layersList" class="layers-list"></div>
-      </section>
-      <section class="card parts-card">
-        <h2>Parts List</h2>
-        <div id="partsList" class="parts-list"></div>
-      </section>
-    </aside>
+    <section id="assemblyView" class="view">
+      <div id="threeHost"></div>
+      <div class="three-tools">
+        <button data-mode="translate" class="active">Move</button>
+        <button data-mode="rotate">Rotate</button>
+        <button data-mode="scale">Scale</button>
+        <button id="fit3dBtn">Fit</button>
+      </div>
+    </section>
+
+    <section id="partsView" class="view">
+      <div class="parts-header">
+        <input id="partsSearch" placeholder="Search labels, layers, materials…" />
+        <button id="exportBtn">Export JSON</button>
+        <label class="import-btn">Import JSON<input id="importInput" type="file" accept="application/json" /></label>
+      </div>
+      <div id="partsTable" class="parts-table"></div>
+    </section>
   </main>
+
+  <nav class="bottom-toolbar">
+    <button data-panel="parts"><span>▣</span>Parts</button>
+    <button data-panel="shapes"><span>⬠</span>Shapes</button>
+    <button data-panel="layers"><span>▤</span>Layers</button>
+    <button data-panel="measure"><span>↔</span>Measure</button>
+    <button data-panel="materials"><span>▧</span>Materials</button>
+    <button data-panel="labels"><span>T</span>Labels</button>
+    <button data-panel="settings"><span>☷</span>Settings</button>
+  </nav>
+
+  <div id="sheetBackdrop" class="sheet-backdrop"></div>
+  <aside id="toolSheet" class="tool-sheet" aria-hidden="true">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title-row"><h2 id="sheetTitle">Shapes</h2><button id="closeSheet">×</button></div>
+    <div id="sheetContent"></div>
+  </aside>
+
+  <template id="shapePanelTemplate">
+    <div class="category-tabs"><button class="active">Construction</button><button>Basic</button><button>Custom</button></div>
+    <div class="shape-grid">
+      <button data-shape="rect"><i class="shape rect"></i><b>Board</b></button>
+      <button data-shape="beam"><i class="shape beam"></i><b>Beam</b></button>
+      <button data-shape="log"><i class="shape pill"></i><b>Log</b></button>
+      <button data-shape="triangle"><i class="shape triangle"></i><b>Triangle</b></button>
+      <button data-shape="trapezoid"><i class="shape trapezoid"></i><b>Trapezoid</b></button>
+      <button data-shape="circle"><i class="shape circle"></i><b>Circle</b></button>
+      <button data-shape="wedge"><i class="shape wedge"></i><b>Wedge</b></button>
+      <button data-shape="panel"><i class="shape panel"></i><b>Panel</b></button>
+    </div>
+  </template>
+
+  <template id="partsPanelTemplate">
+    <div class="panel-form">
+      <label>Existing label<input id="partLabel" placeholder="Example: N-WALL-07" /></label>
+      <div class="two-col"><label>Length<input id="partLength" type="number" min="0.01" step="0.125" value="8" /></label><label>Height<input id="partHeight" type="number" min="0.01" step="0.125" value="2" /></label></div>
+      <div class="two-col"><label>Depth<input id="partDepth" type="number" min="0.01" step="0.125" value="2" /></label><label>Units<select id="partUnits"><option value="ft">feet</option><option value="in">inches</option></select></label></div>
+      <div class="two-col"><label>Layer<input id="partLayer" value="Front Wall" /></label><label>Material<input id="partMaterial" value="Wood" /></label></div>
+      <label>Color<input id="partColor" type="color" value="#8b6b45" /></label>
+      <label>Notes<textarea id="partNotes" rows="2"></textarea></label>
+      <button class="primary wide" id="addPartBtn">Add 3D Part</button>
+    </div>
+  </template>
+
+  <template id="labelsPanelTemplate">
+    <div class="panel-form">
+      <label>Selected part label<input id="editLabel" /></label>
+      <label>Notes<textarea id="editNotes" rows="3"></textarea></label>
+      <button class="primary wide" id="applyLabelBtn">Apply to selection</button>
+    </div>
+  </template>
+
+  <template id="layersPanelTemplate"><div id="layerPanelList" class="layer-panel-list"></div><button id="addLayerBtn" class="wide">+ Add layer</button></template>
+
+  <template id="materialsPanelTemplate">
+    <div class="material-grid">
+      <button data-material="Wood" data-color="#8b6b45"><i style="background:#8b6b45"></i>Wood</button>
+      <button data-material="Aged wood" data-color="#57473a"><i style="background:#57473a"></i>Aged wood</button>
+      <button data-material="Metal" data-color="#87929c"><i style="background:#87929c"></i>Metal</button>
+      <button data-material="Concrete" data-color="#a5a5a5"><i style="background:#a5a5a5"></i>Concrete</button>
+      <button data-material="Roofing" data-color="#56606a"><i style="background:#56606a"></i>Roofing</button>
+    </div>
+    <label class="custom-color">Custom color<input id="customMaterialColor" type="color" value="#8b6b45" /></label>
+  </template>
+
+  <template id="settingsPanelTemplate">
+    <div class="action-grid">
+      <button id="duplicateBtn">Duplicate</button><button id="deleteBtn">Delete</button>
+      <button id="groupBtn">Fasten / Group</button><button id="ungroupBtn">Ungroup</button>
+      <button id="uniteBtn">Unite</button><button id="subtractBtn">Subtract</button>
+      <button id="intersectBtn">Intersect</button><button id="excludeBtn">Exclude</button>
+      <button id="lockBtn">Lock</button><button id="hideBtn">Hide</button>
+    </div>
+    <hr />
+    <div class="two-col"><label>Snap<input id="snapToggle" type="checkbox" checked /></label><label>Grid size<input id="gridSize" type="number" value="0.5" min="0.125" step="0.125" /></label></div>
+    <button id="clearProjectBtn" class="danger wide">Clear project</button>
+  </template>
+
+  <template id="measurePanelTemplate">
+    <div class="panel-form"><p class="hint">Tap two points on the canvas to measure. Measurements use the current project unit.</p><button id="measureModeBtn" class="primary wide">Start measurement</button><div id="measureResult" class="measure-result">No measurement yet.</div></div>
+  </template>
 
   <script type="module" src="app.js"></script>
 </body>
