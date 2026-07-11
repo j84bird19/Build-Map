@@ -44,15 +44,30 @@ function pathFor(o,c=ctx){
   else if(o.type==='wedge'){c.moveTo(-w/2,h/2);c.lineTo(w/2,h/2);c.lineTo(w/2,-h/2);c.closePath();}
   else c.rect(-w/2,-h/2,w,h);
 }
+function drawCompoundObject(o,p){
+  // Boolean work is composited on a transparent offscreen canvas first. This keeps
+  // Subtract/Exclude from erasing the drafting grid or any unrelated objects.
+  const pad=24;
+  const width=Math.max(2,Math.ceil(o.w*state.zoom+pad*2));
+  const height=Math.max(2,Math.ceil(o.h*state.zoom+pad*2));
+  const off=document.createElement('canvas');off.width=width;off.height=height;
+  const oc=off.getContext('2d');oc.translate(width/2,height/2);
+  const drawPart=(part,mode='source-over')=>{
+    oc.save();oc.globalCompositeOperation=mode;
+    oc.translate((part.x-o.x)*state.zoom,(part.y-o.y)*state.zoom);
+    oc.rotate((part.rot||0)-(o.rot||0));pathFor(part,oc);oc.fillStyle=o.color||'#8b6b45';oc.fill();oc.restore();
+  };
+  for(const cid of o.children||[]){const ch=state.objects.find(x=>x.id===cid);if(ch)drawPart(ch);}
+  for(const hole of o.holes||[])drawPart(hole,'destination-out');
+  ctx.save();ctx.translate(p.x,p.y);ctx.rotate(o.rot||0);ctx.drawImage(off,-width/2,-height/2);
+  ctx.strokeStyle='#45494c';ctx.lineWidth=1.2;ctx.strokeRect(-o.w*state.zoom/2,-o.h*state.zoom/2,o.w*state.zoom,o.h*state.zoom);ctx.restore();
+}
 function drawObject(o){
   const layer=state.layers.find(l=>l.name===o.layer); if(layer && !layer.visible)return;
-  const p=worldToScreen(o.x,o.y); ctx.save();ctx.translate(p.x,p.y);ctx.rotate(o.rot||0);
-  if(o.operation==='compound'){
-    for(const cid of o.children||[]){const ch=state.objects.find(x=>x.id===cid);if(!ch)continue;ctx.save();ctx.translate((ch.x-o.x)*state.zoom,(ch.y-o.y)*state.zoom);ctx.rotate((ch.rot||0)-(o.rot||0));pathFor(ch);ctx.fillStyle=o.color;ctx.fill();ctx.restore();}
-    for(const hole of o.holes||[]){ctx.save();ctx.globalCompositeOperation='destination-out';ctx.translate((hole.x-o.x)*state.zoom,(hole.y-o.y)*state.zoom);ctx.rotate((hole.rot||0)-(o.rot||0));pathFor(hole);ctx.fill();ctx.restore();}
-  } else {pathFor(o);ctx.fillStyle=o.color||'#8b6b45';ctx.fill();ctx.strokeStyle='#45494c';ctx.lineWidth=1.2;ctx.stroke();}
-  if(o.label){ctx.rotate(-(o.rot||0));ctx.fillStyle='#111';ctx.font='600 12px system-ui';ctx.textAlign='center';ctx.fillText(o.label,0,4);}
-  ctx.restore();
+  const p=worldToScreen(o.x,o.y);
+  if(o.operation==='compound') drawCompoundObject(o,p);
+  else {ctx.save();ctx.translate(p.x,p.y);ctx.rotate(o.rot||0);pathFor(o);ctx.fillStyle=o.color||'#8b6b45';ctx.fill();ctx.strokeStyle='#45494c';ctx.lineWidth=1.2;ctx.stroke();ctx.restore();}
+  if(o.label){ctx.save();ctx.translate(p.x,p.y);ctx.fillStyle='#111';ctx.font='600 12px system-ui';ctx.textAlign='center';ctx.fillText(o.label,0,4);ctx.restore();}
   if(state.selected.includes(o.id)) drawSelection(o);
 }
 function drawSelection(o){
@@ -234,10 +249,10 @@ for(const el of [canvas,$('#canvasWrap'),$('#designView')]){
 
 function addObject(type='rect',data={}){snapshot();const i=state.objects.length+1,o={id:uid(),type,label:data.label||`P-${String(i).padStart(3,'0')}`,x:data.x??4,y:data.y??4,w:+(data.w??4),h:+(data.h??1),depth:+(data.depth??1),rot:0,color:data.color||'#8b6b45',material:data.material||'Wood',layer:data.layer||'Front Wall',notes:data.notes||'',unit:data.unit||state.unit,hidden:false,locked:false};state.objects.push(o);state.selected=[o.id];renderAll();return o}
 function selectedObjects(){return state.selected.map(id=>state.objects.find(o=>o.id===id)).filter(Boolean)}
-function duplicate(){const sel=selectedObjects();if(!sel.length)return;snapshot();state.selected=[];for(const o of sel){const n={...structuredClone(o),id:uid(),x:o.x+.5,y:o.y+.5,label:o.label+' copy'};delete n.parentId;state.objects.push(n);state.selected.push(n.id)}renderAll()}
+function duplicate(){const sel=selectedObjects();if(!sel.length)return;snapshot();state.selected=[];for(const o of sel){const n={...structuredClone(o),id:uid(),x:o.x+.5,y:o.y+.5,label:o.label};delete n.parentId;state.objects.push(n);state.selected.push(n.id)}renderAll()}
 function removeSelected(){if(!state.selected.length)return;snapshot();state.objects=state.objects.filter(o=>!state.selected.includes(o.id));state.selected=[];renderAll()}
 function booleanOp(op){const sel=selectedObjects();if(sel.length<2){toast('Select at least two objects');return}snapshot();const base=sel[0], rest=sel.slice(1);if(op==='subtract'){base.operation='compound';base.children=base.children||[base.id];base.holes=[...(base.holes||[]),...rest.map(r=>structuredClone(r))];state.objects=state.objects.filter(o=>!rest.includes(o));state.selected=[base.id];toast('Subtracted from primary object');}
-else{const minX=Math.min(...sel.map(o=>o.x-o.w/2)),maxX=Math.max(...sel.map(o=>o.x+o.w/2)),minY=Math.min(...sel.map(o=>o.y-o.h/2)),maxY=Math.max(...sel.map(o=>o.y+o.h/2));const n={...structuredClone(base),id:uid(),x:(minX+maxX)/2,y:(minY+maxY)/2,w:maxX-minX,h:maxY-minY,operation:'compound',children:sel.map(o=>o.id),holes:[],label:`${op.toUpperCase()}-${base.label}`};for(const o of sel)o.parentId=n.id;state.objects.push(n);state.selected=[n.id];toast(`${op} created`)}renderAll()}
+else{const minX=Math.min(...sel.map(o=>o.x-o.w/2)),maxX=Math.max(...sel.map(o=>o.x+o.w/2)),minY=Math.min(...sel.map(o=>o.y-o.h/2)),maxY=Math.max(...sel.map(o=>o.y+o.h/2));const n={...structuredClone(base),id:uid(),x:(minX+maxX)/2,y:(minY+maxY)/2,w:maxX-minX,h:maxY-minY,operation:'compound',children:sel.map(o=>o.id),holes:[],label:base.label};for(const o of sel)o.parentId=n.id;state.objects.push(n);state.selected=[n.id];toast(`${op} created`)}renderAll()}
 function group(){const sel=selectedObjects();if(sel.length<2)return toast('Select multiple parts first');snapshot();const gid=uid();sel.forEach(o=>o.groupId=gid);toast('Parts fastened/grouped');renderAll()}
 function applyMaterial(name,color){selectedObjects().forEach(o=>{o.material=name;o.color=color});renderAll()}
 

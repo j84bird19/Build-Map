@@ -50,3 +50,9 @@ The current build preserves editable compound-shape definitions and visual subtr
 - Selected objects can be resized from any corner handle.
 - Selected objects can be rotated from the round handle above the object.
 - The top and left rulers stay fixed as a frame around the work area while the design moves beneath them.
+
+## v2.3 locked fixes
+- Preserves approved pinch zoom, rotate, resize, and duplicate behavior.
+- Duplicated parts retain the exact same user label instead of adding “copy”. Labels remain editable from the Labels panel.
+- Boolean-created parts retain the primary part label unless the user changes it.
+- Subtract/Exclude are composited on a transparent offscreen layer, preventing the drafting grid or nearby objects from being erased or absorbed into the part.
