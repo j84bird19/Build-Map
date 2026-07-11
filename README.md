@@ -1,22 +1,12 @@
-# Cabin Rebuild Mapper — v2.7
+# Cabin Rebuild Mapper — v2.8
 
-GitHub-ready, flat static web app. Upload the files directly to the repository root.
+GitHub-ready flat web app.
 
-## v2.7 focused changes
-- Save the selected edited object as a reusable custom shape.
-- Separate **Part name** and **Label** fields.
-- Full in-app color picker with saturation/value area, hue slider, HEX/RGB fields, opacity control, and color swatches.
+## Added in v2.8
+- Upload Image tool adds a movable/resizable/rotatable reference image to the work area.
+- Per-layer opacity controls, reflected in both 2D and 3D views.
+- Named project saving with a saved-project list.
+- Load, new blank project, clear current project, and delete saved project actions.
+- App opens to a blank new project by default.
 
-## Locked systems preserved
-- Pinch zoom and fixed rulers
-- Tap and marquee selection
-- Move, resize, rotate, and duplicate
-- Measurement tool
-- Layer visibility and lock icons
-- Movable/editable boolean results: Unite, Subtract, Intersect, and Exclude
-
-Open `index.html`, or host all files from the root with GitHub Pages.
-
-
-## v2.7
-The Parts panel now works as a properties inspector: blank fields create a new part, while selecting one object loads its current name, label, dimensions, material, color, layer, units, and notes for editing.
+All previously approved object editing, boolean operations, properties, custom shapes, color picker, zoom, rotation, resizing, duplication, measurement, rulers, and layer lock systems remain unchanged.

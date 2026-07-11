@@ -64,7 +64,10 @@
     <button data-panel="layers"><span>▤</span>Layers</button>
     <button data-panel="measure"><span>↔</span>Measure</button>
     <button data-panel="materials"><span>▧</span>Materials</button>
+    <button id="uploadImageBtn"><span>▧</span>Upload Image</button>
+    <input id="imageUploadInput" type="file" accept="image/*" hidden />
     <button data-panel="labels"><span>T</span>Labels</button>
+    <button data-panel="projects"><span>▦</span>Projects</button>
     <button data-panel="settings"><span>☷</span>Settings</button>
   </nav>
 
@@ -116,6 +119,16 @@
   </template>
 
   <template id="layersPanelTemplate"><div id="layerPanelList" class="layer-panel-list"></div><button id="addLayerBtn" class="wide">+ Add layer</button></template>
+
+  <template id="projectsPanelTemplate">
+    <div class="panel-form">
+      <label>Current project<input id="projectNameInput" placeholder="Project name" /></label>
+      <div class="two-col"><button class="primary wide" id="saveProjectPanelBtn">Save Project</button><button class="wide" id="newProjectBtn">New Project</button></div>
+      <button class="danger wide" id="resetProjectBtn">Clear Current Project</button>
+      <h3 class="project-list-title">Saved Projects</h3>
+      <div id="savedProjectsList" class="saved-projects-list"></div>
+    </div>
+  </template>
 
   <template id="materialsPanelTemplate">
     <div class="material-grid">

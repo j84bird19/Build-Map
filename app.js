@@ -9,7 +9,7 @@ const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
 const state = {
   objects: [], selected: [], layers: [{name:'Front Wall', visible:true, locked:false, color:'#22c44b'}],
   unit:'ft', zoom:42, panX:70, panY:55, snap:true, grid:0.5, undo:[], redo:[],
-  activeView:'design', measureMode:false, measurePts:[], lastMeasurement:null, marquee:null, customShapes:[]
+  activeView:'design', measureMode:false, measurePts:[], lastMeasurement:null, marquee:null, customShapes:[], projectName:'Untitled Project'
 };
 
 const canvas = $('#designCanvas'), ctx = canvas.getContext('2d');
@@ -19,8 +19,28 @@ let drag = null;
 
 function snapshot(){ state.undo.push(JSON.stringify({objects:state.objects,layers:state.layers})); if(state.undo.length>60)state.undo.shift(); state.redo=[]; }
 function restore(raw){ const d=JSON.parse(raw); state.objects=d.objects||[]; state.layers=d.layers||state.layers; state.selected=[]; renderAll(); }
-function saveLocal(){ localStorage.setItem('cabin-rebuild-mapper-v25', JSON.stringify({objects:state.objects,layers:state.layers,grid:state.grid,snap:state.snap,customShapes:state.customShapes})); toast('Project saved'); }
-function loadLocal(){ try{const d=JSON.parse(localStorage.getItem('cabin-rebuild-mapper-v25')||localStorage.getItem('cabin-rebuild-mapper-v2')); if(d){Object.assign(state,d);state.customShapes=state.customShapes||[];state.objects=(state.objects||[]).map((o,i)=>({...o,name:o.name||o.label||`Part ${i+1}`}));}}catch{} }
+const PROJECTS_KEY='cabin-rebuild-mapper-projects-v1';
+function projectPayload(){return{version:3,name:state.projectName,objects:state.objects,layers:state.layers,grid:state.grid,snap:state.snap,customShapes:state.customShapes,unit:state.unit}}
+function getSavedProjects(){try{return JSON.parse(localStorage.getItem(PROJECTS_KEY)||'{}')}catch{return{}}}
+function setSavedProjects(projects){localStorage.setItem(PROJECTS_KEY,JSON.stringify(projects))}
+function saveLocal(forceName=false){
+  let name=(state.projectName||'').trim();
+  if(forceName||!name||name==='Untitled Project'){
+    const entered=prompt('Project name',name==='Untitled Project'?'':name);
+    if(entered===null)return false;
+    name=entered.trim()||'Untitled Project';
+  }
+  state.projectName=name;
+  const projects=getSavedProjects();projects[name]={...projectPayload(),savedAt:new Date().toISOString()};setSavedProjects(projects);
+  toast(`Saved: ${name}`);return true;
+}
+function loadProject(name){const d=getSavedProjects()[name];if(!d)return toast('Saved project not found');Object.assign(state,d);state.projectName=name;state.layers=(state.layers||[]).map(l=>({...l,opacity:l.opacity??1}));state.objects=(state.objects||[]).map((o,i)=>({...o,name:o.name||o.label||`Part ${i+1}`}));state.selected=[];state.undo=[];state.redo=[];renderAll();closePanel();toast(`Loaded: ${name}`)}
+function newProject(){state.objects=[];state.selected=[];state.layers=[{name:'Front Wall',visible:true,locked:false,color:'#22c44b',opacity:1}];state.projectName='Untitled Project';state.undo=[];state.redo=[];state.lastMeasurement=null;renderAll();closePanel();toast('New blank project')}
+function loadLocal(){
+  // Projects intentionally open blank. Preserve one legacy build as a recoverable saved project.
+  try{const legacy=JSON.parse(localStorage.getItem('cabin-rebuild-mapper-v25')||localStorage.getItem('cabin-rebuild-mapper-v2'));if(legacy){const projects=getSavedProjects();if(!projects['Recovered Project']){projects['Recovered Project']={...legacy,name:'Recovered Project',savedAt:new Date().toISOString()};setSavedProjects(projects)}}}catch{}
+  state.layers=state.layers.map(l=>({...l,opacity:l.opacity??1}));
+}
 function toast(msg){ $('#selectionReadout').textContent=msg; clearTimeout(toast.t); toast.t=setTimeout(updateReadout,1800); }
 
 function resize(){
@@ -148,11 +168,13 @@ function drawCompoundObject(o,p){
 }
 function drawObject(o){
   const layer=state.layers.find(l=>l.name===o.layer); if(layer && !layer.visible)return;
+  ctx.save();ctx.globalAlpha=layer?.opacity??1;
   const p=worldToScreen(o.x,o.y);
   if(o.operation==='compound') drawCompoundObject(o,p);
   else {ctx.save();ctx.translate(p.x,p.y);ctx.rotate(o.rot||0);pathFor(o);ctx.fillStyle=o.color||'#8b6b45';ctx.fill();ctx.strokeStyle='#45494c';ctx.lineWidth=1.2;ctx.stroke();ctx.restore();}
   if(o.label){ctx.save();ctx.translate(p.x,p.y);ctx.fillStyle='#111';ctx.font='600 12px system-ui';ctx.textAlign='center';ctx.fillText(o.label,0,4);ctx.restore();}
   if(state.selected.includes(o.id)) drawSelection(o);
+  ctx.restore();
 }
 function drawSelection(o){
   const p=worldToScreen(o.x,o.y),w=o.w*state.zoom,h=o.h*state.zoom;ctx.save();ctx.translate(p.x,p.y);ctx.rotate(o.rot||0);ctx.strokeStyle='#15958e';ctx.lineWidth=2;ctx.strokeRect(-w/2,-h/2,w,h);ctx.fillStyle='#fff';ctx.strokeStyle='#15958e';for(const [x,y] of [[-w/2,-h/2],[w/2,-h/2],[w/2,h/2],[-w/2,h/2]]){ctx.fillRect(x-5,y-5,10,10);ctx.strokeRect(x-5,y-5,10,10)}ctx.beginPath();ctx.moveTo(0,-h/2);ctx.lineTo(0,-h/2-28);ctx.stroke();ctx.beginPath();ctx.arc(0,-h/2-36,9,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.restore();
@@ -369,7 +391,7 @@ function booleanOp(op){
 function group(){const sel=selectedObjects();if(sel.length<2)return toast('Select multiple parts first');snapshot();const gid=uid();sel.forEach(o=>o.groupId=gid);toast('Parts fastened/grouped');renderAll()}
 function applyMaterial(name,color){selectedObjects().forEach(o=>{o.material=name;o.color=color});renderAll()}
 
-const panelTemplates={shapes:'shapePanelTemplate',parts:'partsPanelTemplate',labels:'labelsPanelTemplate',layers:'layersPanelTemplate',materials:'materialsPanelTemplate',settings:'settingsPanelTemplate',measure:'measurePanelTemplate'};
+const panelTemplates={shapes:'shapePanelTemplate',parts:'partsPanelTemplate',labels:'labelsPanelTemplate',layers:'layersPanelTemplate',materials:'materialsPanelTemplate',projects:'projectsPanelTemplate',settings:'settingsPanelTemplate',measure:'measurePanelTemplate'};
 function openPanel(name){const id=panelTemplates[name];if(!id)return;$('#sheetTitle').textContent=name[0].toUpperCase()+name.slice(1);$('#sheetContent').innerHTML='';$('#sheetContent').append($('#'+id).content.cloneNode(true));$('#toolSheet').classList.add('open');$('#sheetBackdrop').classList.add('open');$('#toolSheet').setAttribute('aria-hidden','false');$$('.bottom-toolbar button').forEach(b=>b.classList.toggle('active',b.dataset.panel===name));wirePanel(name)}
 function closePanel(){$('#toolSheet').classList.remove('open');$('#sheetBackdrop').classList.remove('open');$('#toolSheet').setAttribute('aria-hidden','true');$$('.bottom-toolbar button').forEach(b=>b.classList.remove('active'))}
 function wirePanel(name){
@@ -440,6 +462,7 @@ function wirePanel(name){
  if(name==='labels'){const o=selectedObjects()[0];$('#editName').value=o?.name||'';$('#editLabel').value=o?.label||'';$('#editNotes').value=o?.notes||'';$('#applyLabelBtn').onclick=()=>{selectedObjects().forEach(x=>{x.name=$('#editName').value;x.label=$('#editLabel').value;x.notes=$('#editNotes').value});renderAll();closePanel()}}
  if(name==='layers'){renderLayerPanel();$('#addLayerBtn').onclick=()=>{const n=prompt('Layer name');if(n){ensureLayer(n);renderLayerPanel();renderAll()}}}
  if(name==='materials'){$$('[data-material]',$('#sheetContent')).forEach(b=>b.onclick=()=>{applyMaterial(b.dataset.material,b.dataset.color);closePanel()});wireColorTrigger('#customMaterialColorTrigger','#customMaterialColor',color=>applyMaterial('Custom',color))}
+ if(name==='projects'){wireProjectsPanel()}
  if(name==='settings'){ $('#duplicateBtn').onclick=duplicate;$('#deleteBtn').onclick=removeSelected;$('#groupBtn').onclick=group;$('#ungroupBtn').onclick=()=>{selectedObjects().forEach(o=>delete o.groupId);renderAll()};$('#uniteBtn').onclick=()=>booleanOp('unite');$('#subtractBtn').onclick=()=>booleanOp('subtract');$('#intersectBtn').onclick=()=>booleanOp('intersect');$('#excludeBtn').onclick=()=>booleanOp('exclude');$('#lockBtn').onclick=()=>{selectedObjects().forEach(o=>o.locked=!o.locked);renderAll()};$('#hideBtn').onclick=()=>{selectedObjects().forEach(o=>o.hidden=true);state.selected=[];renderAll()};$('#snapToggle').checked=state.snap;$('#snapToggle').onchange=e=>state.snap=e.target.checked;$('#gridSize').value=state.grid;$('#gridSize').onchange=e=>{state.grid=+e.target.value;render2d()};$('#clearProjectBtn').onclick=()=>{if(confirm('Clear the entire project?')){snapshot();state.objects=[];state.selected=[];renderAll();closePanel()}} }
  if(name==='measure'){const result=$('#measureResult');if(result&&state.lastMeasurement)result.textContent=`${state.lastMeasurement.distance.toFixed(3)} ${state.unit}`;$('#measureModeBtn').onclick=()=>{state.measureMode=true;state.measurePts=[];state.lastMeasurement=null;closePanel();toast('Tap two points to measure')}};
 }
@@ -471,15 +494,30 @@ function hexToRgb(hex){const m=String(hex).replace('#','').match(/^([0-9a-f]{2})
 function rgbToHsv(r,g,b){r/=255;g/=255;b/=255;const max=Math.max(r,g,b),min=Math.min(r,g,b),d=max-min;let h=0;if(d){if(max===r)h=60*(((g-b)/d)%6);else if(max===g)h=60*((b-r)/d+2);else h=60*((r-g)/d+4)}if(h<0)h+=360;return{h,s:max?d/max:0,v:max}}
 function hsvToRgb(h,s,v){const c=v*s,x=c*(1-Math.abs((h/60)%2-1)),m=v-c;let r=0,g=0,b=0;if(h<60)[r,g,b]=[c,x,0];else if(h<120)[r,g,b]=[x,c,0];else if(h<180)[r,g,b]=[0,c,x];else if(h<240)[r,g,b]=[0,x,c];else if(h<300)[r,g,b]=[x,0,c];else [r,g,b]=[c,0,x];return{r:(r+m)*255,g:(g+m)*255,b:(b+m)*255}}
 
-function ensureLayer(name){if(!state.layers.some(l=>l.name===name))state.layers.push({name,visible:true,locked:false,color:`hsl(${Math.random()*360} 60% 50%)`})}
-function renderLayerPanel(){const host=$('#layerPanelList');if(!host)return;const icon=l=>l.locked?`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V7a5 5 0 0 1 10 0v3h1.5A1.5 1.5 0 0 1 20 11.5v8A1.5 1.5 0 0 1 18.5 21h-13A1.5 1.5 0 0 1 4 19.5v-8A1.5 1.5 0 0 1 5.5 10H7Zm2 0h6V7a3 3 0 0 0-6 0v3Z"/></svg>`:`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 10V7a5 5 0 0 0-9.9-1H9.2A3 3 0 0 1 15 7v3H5.5A1.5 1.5 0 0 0 4 11.5v8A1.5 1.5 0 0 0 5.5 21h13a1.5 1.5 0 0 0 1.5-1.5v-8a1.5 1.5 0 0 0-1.5-1.5H17Z"/></svg>`;host.innerHTML=state.layers.map((l,i)=>`<div class="layer-row"><input type="checkbox" data-vis="${i}" ${l.visible?'checked':''}><span><i class="layer-dot" style="background:${l.color};display:inline-block;margin-right:7px"></i>${l.name}</span><button class="layer-lock ${l.locked?'is-locked':''}" data-lock="${i}" aria-label="${l.locked?'Unlock':'Lock'} ${l.name}">${icon(l)}</button></div>`).join('');$$('[data-vis]',host).forEach(x=>x.onchange=()=>{state.layers[+x.dataset.vis].visible=x.checked;renderAll()});$$('[data-lock]',host).forEach(x=>x.onclick=()=>{const l=state.layers[+x.dataset.lock];l.locked=!l.locked;state.objects.filter(o=>o.layer===l.name).forEach(o=>o.locked=l.locked);renderLayerPanel();renderAll()})}
-function updateReadout(){const s=selectedObjects();if(!s.length)$('#selectionReadout').textContent='Cabin Rebuild Mapper';else if(s.length===1){const o=s[0];$('#selectionReadout').textContent=`${o.w.toFixed(3)} × ${o.h.toFixed(3)} ${o.unit||state.unit}   X:${o.x.toFixed(3)} Y:${o.y.toFixed(3)}`}else $('#selectionReadout').textContent=`${s.length} objects selected`}
+function ensureLayer(name){if(!state.layers.some(l=>l.name===name))state.layers.push({name,visible:true,locked:false,color:`hsl(${Math.random()*360} 60% 50%)`,opacity:1})}
+function renderLayerPanel(){
+  const host=$('#layerPanelList');if(!host)return;state.layers.forEach(l=>l.opacity=l.opacity??1);
+  const icon=l=>l.locked?`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V7a5 5 0 0 1 10 0v3h1.5A1.5 1.5 0 0 1 20 11.5v8A1.5 1.5 0 0 1 18.5 21h-13A1.5 1.5 0 0 1 4 19.5v-8A1.5 1.5 0 0 1 5.5 10H7Zm2 0h6V7a3 3 0 0 0-6 0v3Z"/></svg>`:`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 10V7a5 5 0 0 0-9.9-1H9.2A3 3 0 0 1 15 7v3H5.5A1.5 1.5 0 0 0 4 11.5v8A1.5 1.5 0 0 0 5.5 21h13a1.5 1.5 0 0 0 1.5-1.5v-8a1.5 1.5 0 0 0-1.5-1.5H17Z"/></svg>`;
+  host.innerHTML=state.layers.map((l,i)=>`<div class="layer-row"><input type="checkbox" data-vis="${i}" ${l.visible?'checked':''}><span><i class="layer-dot" style="background:${l.color};display:inline-block;margin-right:7px"></i>${l.name}<small>${Math.round(l.opacity*100)}%</small></span><button class="layer-lock ${l.locked?'is-locked':''}" data-lock="${i}" aria-label="${l.locked?'Unlock':'Lock'} ${l.name}">${icon(l)}</button><label class="layer-opacity">Opacity<input type="range" min="0" max="100" value="${Math.round(l.opacity*100)}" data-opacity="${i}"></label></div>`).join('');
+  $$('[data-vis]',host).forEach(x=>x.onchange=()=>{state.layers[+x.dataset.vis].visible=x.checked;renderAll()});
+  $$('[data-lock]',host).forEach(x=>x.onclick=()=>{const l=state.layers[+x.dataset.lock];l.locked=!l.locked;state.objects.filter(o=>o.layer===l.name).forEach(o=>o.locked=l.locked);renderLayerPanel();renderAll()});
+  $$('[data-opacity]',host).forEach(x=>x.oninput=()=>{state.layers[+x.dataset.opacity].opacity=+x.value/100;const small=x.closest('.layer-row').querySelector('small');if(small)small.textContent=`${x.value}%`;renderAll()});
+}
+function wireProjectsPanel(){
+  $('#projectNameInput').value=state.projectName||'Untitled Project';
+  const render=()=>{const projects=getSavedProjects(),host=$('#savedProjectsList');const names=Object.keys(projects).sort((a,b)=>(projects[b].savedAt||'').localeCompare(projects[a].savedAt||''));host.innerHTML=names.length?names.map(n=>`<div class="saved-project-row"><button class="project-load" data-load-project="${encodeURIComponent(n)}"><b>${n}</b><small>${projects[n].savedAt?new Date(projects[n].savedAt).toLocaleString():''}</small></button><button class="project-delete" data-delete-project="${encodeURIComponent(n)}" aria-label="Delete ${n}">×</button></div>`).join(''):'<p class="hint">No saved projects yet.</p>';$$('[data-load-project]',host).forEach(b=>b.onclick=()=>loadProject(decodeURIComponent(b.dataset.loadProject)));$$('[data-delete-project]',host).forEach(b=>b.onclick=()=>{const n=decodeURIComponent(b.dataset.deleteProject);if(confirm(`Delete saved project “${n}”?`)){const ps=getSavedProjects();delete ps[n];setSavedProjects(ps);render()}})};
+  $('#saveProjectPanelBtn').onclick=()=>{state.projectName=$('#projectNameInput').value.trim()||'Untitled Project';if(saveLocal())render()};
+  $('#newProjectBtn').onclick=()=>{if(!state.objects.length||confirm('Start a new blank project? Unsaved changes will be lost.'))newProject()};
+  $('#resetProjectBtn').onclick=()=>{if(confirm('Clear every object from the current project?')){snapshot();state.objects=[];state.selected=[];state.lastMeasurement=null;renderAll();toast('Current project cleared')}};
+  render();
+}
+function updateReadout(){const s=selectedObjects();if(!s.length)$('#selectionReadout').textContent=state.projectName||'Untitled Project';else if(s.length===1){const o=s[0];$('#selectionReadout').textContent=`${o.w.toFixed(3)} × ${o.h.toFixed(3)} ${o.unit||state.unit}   X:${o.x.toFixed(3)} Y:${o.y.toFixed(3)}`}else $('#selectionReadout').textContent=`${s.length} objects selected`}
 function renderParts(){const q=($('#partsSearch')?.value||'').toLowerCase();const rows=state.objects.filter(o=>!o.parentId).filter(o=>`${o.name||''} ${o.label} ${o.layer} ${o.material}`.toLowerCase().includes(q));$('#partsTable').innerHTML=rows.length?rows.map(o=>`<article class="part-card" data-id="${o.id}"><h3>${o.name||'Unnamed part'}</h3><div class="part-label">Label: ${o.label||'—'}</div><div class="part-meta"><span>${o.w} × ${o.h} × ${o.depth} ${o.unit||state.unit}</span><span>${o.material}</span><span>${o.layer}</span><span>${o.hidden?'Hidden':''}${o.locked?' Locked':''}</span></div>${o.notes?`<p>${o.notes}</p>`:''}</article>`).join(''):'<p>No parts yet.</p>';$$('.part-card').forEach(c=>c.onclick=()=>{state.selected=[c.dataset.id];switchView('design');renderAll()})}
 
 let renderer,scene,camera,controls,transform,meshMap=new Map();
 function init3d(){const host=$('#threeHost');renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));host.append(renderer.domElement);scene=new THREE.Scene();scene.background=new THREE.Color(0xd8dcdf);camera=new THREE.PerspectiveCamera(45,1,.1,500);camera.position.set(13,11,13);controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;scene.add(new THREE.HemisphereLight(0xffffff,0x56606a,2.5));const dl=new THREE.DirectionalLight(0xffffff,2);dl.position.set(8,15,10);scene.add(dl);const grid=new THREE.GridHelper(40,40,0x8c9499,0xbac0c4);scene.add(grid);transform=new TransformControls(camera,renderer.domElement);transform.addEventListener('dragging-changed',e=>controls.enabled=!e.value);transform.addEventListener('objectChange',()=>{const mesh=transform.object;if(!mesh)return;const o=state.objects.find(x=>x.id===mesh.userData.id);if(o){o.x=mesh.position.x;o.y=mesh.position.z;o.depth=Math.max(.01,mesh.scale.y*mesh.geometry.parameters.height);o.rot=-mesh.rotation.y;render2d();renderParts()}});scene.add(transform);renderer.domElement.addEventListener('pointerdown',pick3d);animate3d();resize3d()}
 function shapeGeometry(o){if(o.type==='circle'||o.type==='log')return new THREE.CylinderGeometry(o.w/2,o.w/2,o.depth,32);return new THREE.BoxGeometry(o.w,o.depth,o.h)}
-function sync3d(){if(!scene)return;for(const m of meshMap.values())scene.remove(m);meshMap.clear();for(const o of state.objects.filter(x=>!x.hidden&&!x.parentId)){const mat=new THREE.MeshStandardMaterial({color:o.color||'#8b6b45',roughness:.8});const mesh=new THREE.Mesh(shapeGeometry(o),mat);mesh.position.set(o.x,o.depth/2,o.y);mesh.rotation.y=-(o.rot||0);mesh.userData.id=o.id;scene.add(mesh);meshMap.set(o.id,mesh)}const selected=selectedObjects()[0];if(selected&&meshMap.has(selected.id))transform.attach(meshMap.get(selected.id));else transform.detach()}
+function sync3d(){if(!scene)return;for(const m of meshMap.values())scene.remove(m);meshMap.clear();for(const o of state.objects.filter(x=>!x.hidden&&!x.parentId)){const layer=state.layers.find(l=>l.name===o.layer);const opacity=layer?.opacity??1;const mat=new THREE.MeshStandardMaterial({color:o.color||'#8b6b45',roughness:.8,transparent:opacity<1,opacity,depthWrite:opacity>=1});const mesh=new THREE.Mesh(shapeGeometry(o),mat);mesh.position.set(o.x,o.depth/2,o.y);mesh.rotation.y=-(o.rot||0);mesh.userData.id=o.id;scene.add(mesh);meshMap.set(o.id,mesh)}const selected=selectedObjects()[0];if(selected&&meshMap.has(selected.id))transform.attach(meshMap.get(selected.id));else transform.detach()}
 function pick3d(e){const r=renderer.domElement.getBoundingClientRect(),mouse=new THREE.Vector2((e.clientX-r.left)/r.width*2-1,-((e.clientY-r.top)/r.height)*2+1),ray=new THREE.Raycaster();ray.setFromCamera(mouse,camera);const hit=ray.intersectObjects([...meshMap.values()])[0];if(hit){state.selected=[hit.object.userData.id];transform.attach(hit.object);render2d();updateReadout()}}
 function animate3d(){requestAnimationFrame(animate3d);controls?.update();renderer?.render(scene,camera)}
 function resize3d(){if(!renderer)return;const host=$('#threeHost'),w=host.clientWidth||1,h=host.clientHeight||1;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix()}
@@ -488,9 +526,11 @@ function fit3d(){if(!state.objects.length)return;const box=new THREE.Box3();for(
 function switchView(v){state.activeView=v;$$('.view').forEach(x=>x.classList.toggle('active',x.id===`${v}View`));$$('.view-tab').forEach(x=>x.classList.toggle('active',x.dataset.view===v));if(v==='assembly'){sync3d();setTimeout(resize3d,30)}if(v==='parts')renderParts()}
 function renderAll(){render2d();renderParts();sync3d();}
 
-$$('.bottom-toolbar button').forEach(b=>b.onclick=()=>openPanel(b.dataset.panel));$('#closeSheet').onclick=closePanel;$('#sheetBackdrop').onclick=closePanel;
+$$('.bottom-toolbar button[data-panel]').forEach(b=>b.onclick=()=>openPanel(b.dataset.panel));$('#closeSheet').onclick=closePanel;$('#sheetBackdrop').onclick=closePanel;
+$('#uploadImageBtn').onclick=()=>$('#imageUploadInput').click();
+$('#imageUploadInput').onchange=e=>{const file=e.target.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=()=>{const img=new Image();img.onload=()=>{snapshot();const maxWorld=8,ratio=img.naturalWidth/Math.max(1,img.naturalHeight);let w=ratio>=1?maxWorld:maxWorld*ratio,h=ratio>=1?maxWorld/ratio:maxWorld;const center=screenToWorld(canvas.clientWidth/2,canvas.clientHeight/2);const o={id:uid(),type:'image',operation:'compound',rasterData:reader.result,name:file.name.replace(/\.[^.]+$/,''),label:'',x:center.x,y:center.y,w,h,sourceW:w,sourceH:h,depth:.25,rot:0,color:'#ffffff',material:'Image',layer:state.layers[0]?.name||'Front Wall',unit:state.unit,notes:'Uploaded reference image'};state.objects.push(o);state.selected=[o.id];renderAll();toast('Image added to work area')};img.src=reader.result};reader.readAsDataURL(file);e.target.value=''};
 $$('.view-tab').forEach(b=>b.onclick=()=>switchView(b.dataset.view));$('#processBtn').onclick=()=>switchView(state.activeView==='assembly'?'design':'assembly');
-$('#saveBtn').onclick=saveLocal;$('#undoBtn').onclick=()=>{if(!state.undo.length)return;state.redo.push(JSON.stringify({objects:state.objects,layers:state.layers}));restore(state.undo.pop())};$('#redoBtn').onclick=()=>{if(!state.redo.length)return;state.undo.push(JSON.stringify({objects:state.objects,layers:state.layers}));restore(state.redo.pop())};
+$('#saveBtn').onclick=()=>saveLocal();$('#undoBtn').onclick=()=>{if(!state.undo.length)return;state.redo.push(JSON.stringify({objects:state.objects,layers:state.layers}));restore(state.undo.pop())};$('#redoBtn').onclick=()=>{if(!state.redo.length)return;state.undo.push(JSON.stringify({objects:state.objects,layers:state.layers}));restore(state.redo.pop())};
 $('#centerBtn').onclick=()=>{state.panX=70;state.panY=55;state.zoom=42;render2d()};$('#backBtn').onclick=()=>history.length>1?history.back():toast('Project stays saved on this device');
 $('#partsSearch').oninput=renderParts;$('#exportBtn').onclick=()=>{const blob=new Blob([JSON.stringify({version:2,objects:state.objects,layers:state.layers},null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='cabin-rebuild-project.json';a.click();URL.revokeObjectURL(a.href)};
 $('#importInput').onchange=async e=>{try{snapshot();const d=JSON.parse(await e.target.files[0].text());state.objects=d.objects||[];state.layers=d.layers||state.layers;renderAll();saveLocal()}catch{alert('That project file could not be read.')}};
