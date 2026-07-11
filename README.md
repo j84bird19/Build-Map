@@ -1,21 +1,18 @@
-# Cabin Rebuild Mapper — xTool UI v2.5
+# Cabin Rebuild Mapper — v2.6
 
-## Fixed in v2.5
+GitHub-ready, flat static web app. Upload the files directly to the repository root.
 
-- Boolean operations now create a **new, self-contained editable shape**.
-- Subtracted cutouts move with the resulting object instead of staying behind on the canvas.
-- New boolean shapes can be moved, rotated, resized, duplicated, saved, and used in another boolean operation.
-- Original source objects are consumed when Unite, Subtract, Intersect, or Exclude is applied.
-- The drafting grid remains separate and is never included in shape geometry.
+## v2.6 focused changes
+- Save the selected edited object as a reusable custom shape.
+- Separate **Part name** and **Label** fields.
+- Full in-app color picker with saturation/value area, hue slider, HEX/RGB fields, opacity control, and color swatches.
 
-## Locked systems
+## Locked systems preserved
+- Pinch zoom and fixed rulers
+- Tap and marquee selection
+- Move, resize, rotate, and duplicate
+- Measurement tool
+- Layer visibility and lock icons
+- Movable/editable boolean results: Unite, Subtract, Intersect, and Exclude
 
-- Two-finger pinch zoom
-- Object rotation
-- Object resizing
-- Object duplication
-- Fixed top and left rulers
-- Custom part labels
-- Layer lock/unlock icons
-
-Upload the files in this ZIP directly to the root of the GitHub repository.
+Open `index.html`, or host all files from the root with GitHub Pages.

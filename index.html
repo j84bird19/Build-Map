@@ -76,8 +76,8 @@
   </aside>
 
   <template id="shapePanelTemplate">
-    <div class="category-tabs"><button class="active">Construction</button><button>Basic</button><button>Custom</button></div>
-    <div class="shape-grid">
+    <div class="category-tabs"><button class="active" data-shape-tab="builtins">Construction</button><button data-shape-tab="custom">Custom</button></div>
+    <div class="shape-grid" id="builtinShapeGrid">
       <button data-shape="rect"><i class="shape rect"></i><b>Board</b></button>
       <button data-shape="beam"><i class="shape beam"></i><b>Beam</b></button>
       <button data-shape="log"><i class="shape pill"></i><b>Log</b></button>
@@ -87,15 +87,20 @@
       <button data-shape="wedge"><i class="shape wedge"></i><b>Wedge</b></button>
       <button data-shape="panel"><i class="shape panel"></i><b>Panel</b></button>
     </div>
+    <div id="customShapePanel" hidden>
+      <button class="primary wide" id="saveCustomShapeBtn">Save selected shape</button>
+      <div id="customShapeGrid" class="shape-grid custom-shape-grid"></div>
+    </div>
   </template>
 
   <template id="partsPanelTemplate">
     <div class="panel-form">
-      <label>Existing label<input id="partLabel" placeholder="Example: N-WALL-07" /></label>
+      <label>Part name<input id="partName" placeholder="Example: Porch Roof Beam #1" /></label>
+      <label>Label<input id="partLabel" placeholder="Example: PRB 1" /></label>
       <div class="two-col"><label>Length<input id="partLength" type="number" min="0.01" step="0.125" value="8" /></label><label>Height<input id="partHeight" type="number" min="0.01" step="0.125" value="2" /></label></div>
       <div class="two-col"><label>Depth<input id="partDepth" type="number" min="0.01" step="0.125" value="2" /></label><label>Units<select id="partUnits"><option value="ft">feet</option><option value="in">inches</option></select></label></div>
       <div class="two-col"><label>Layer<input id="partLayer" value="Front Wall" /></label><label>Material<input id="partMaterial" value="Wood" /></label></div>
-      <label>Color<input id="partColor" type="color" value="#8b6b45" /></label>
+      <label>Color<button type="button" class="color-picker-trigger" id="partColorTrigger"><i style="background:#8b6b45"></i><span>#8B6B45</span></button><input id="partColor" type="hidden" value="#8b6b45" /></label>
       <label>Notes<textarea id="partNotes" rows="2"></textarea></label>
       <button class="primary wide" id="addPartBtn">Add 3D Part</button>
     </div>
@@ -103,6 +108,7 @@
 
   <template id="labelsPanelTemplate">
     <div class="panel-form">
+      <label>Selected part name<input id="editName" /></label>
       <label>Selected part label<input id="editLabel" /></label>
       <label>Notes<textarea id="editNotes" rows="3"></textarea></label>
       <button class="primary wide" id="applyLabelBtn">Apply to selection</button>
@@ -119,7 +125,7 @@
       <button data-material="Concrete" data-color="#a5a5a5"><i style="background:#a5a5a5"></i>Concrete</button>
       <button data-material="Roofing" data-color="#56606a"><i style="background:#56606a"></i>Roofing</button>
     </div>
-    <label class="custom-color">Custom color<input id="customMaterialColor" type="color" value="#8b6b45" /></label>
+    <label class="custom-color">Custom color<button type="button" class="color-picker-trigger" id="customMaterialColorTrigger"><i style="background:#8b6b45"></i><span>#8B6B45</span></button><input id="customMaterialColor" type="hidden" value="#8b6b45" /></label>
   </template>
 
   <template id="settingsPanelTemplate">
@@ -139,6 +145,24 @@
     <div class="panel-form"><p class="hint">Tap two points on the canvas to measure. Measurements use the current project unit.</p><button id="measureModeBtn" class="primary wide">Start measurement</button><div id="measureResult" class="measure-result">No measurement yet.</div></div>
   </template>
 
+
+  <div id="colorPickerBackdrop" class="color-picker-backdrop" hidden></div>
+  <section id="colorPickerDialog" class="color-picker-dialog" hidden aria-modal="true" role="dialog" aria-labelledby="colorPickerTitle">
+    <div class="color-picker-head"><h2 id="colorPickerTitle">Select color</h2><button id="closeColorPicker" aria-label="Close">×</button></div>
+    <div id="svPicker" class="sv-picker"><span id="svCursor"></span></div>
+    <input id="hueSlider" class="hue-slider" type="range" min="0" max="360" value="30" />
+    <input id="alphaSlider" class="alpha-slider" type="range" min="0" max="100" value="100" />
+    <div class="color-values">
+      <label>Hex<input id="hexColor" maxlength="8" /></label>
+      <label>R<input id="redColor" type="number" min="0" max="255" /></label>
+      <label>G<input id="greenColor" type="number" min="0" max="255" /></label>
+      <label>B<input id="blueColor" type="number" min="0" max="255" /></label>
+      <label>A<input id="alphaColor" type="number" min="0" max="100" value="100" /></label>
+      <i id="chosenColor"></i>
+    </div>
+    <div id="colorSwatches" class="color-swatches"></div>
+    <div class="color-picker-actions"><button id="cancelColorPicker">Cancel</button><button class="primary" id="setColorPicker">Set</button></div>
+  </section>
   <script type="module" src="app.js"></script>
 </body>
 </html>
