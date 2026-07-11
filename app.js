@@ -19,8 +19,8 @@ let drag = null;
 
 function snapshot(){ state.undo.push(JSON.stringify({objects:state.objects,layers:state.layers})); if(state.undo.length>60)state.undo.shift(); state.redo=[]; }
 function restore(raw){ const d=JSON.parse(raw); state.objects=d.objects||[]; state.layers=d.layers||state.layers; state.selected=[]; renderAll(); }
-function saveLocal(){ localStorage.setItem('cabin-rebuild-mapper-v2', JSON.stringify({objects:state.objects,layers:state.layers,grid:state.grid,snap:state.snap})); toast('Project saved'); }
-function loadLocal(){ try{const d=JSON.parse(localStorage.getItem('cabin-rebuild-mapper-v2')); if(d){Object.assign(state,d);}}catch{} }
+function saveLocal(){ localStorage.setItem('cabin-rebuild-mapper-v25', JSON.stringify({objects:state.objects,layers:state.layers,grid:state.grid,snap:state.snap})); toast('Project saved'); }
+function loadLocal(){ try{const d=JSON.parse(localStorage.getItem('cabin-rebuild-mapper-v25')||localStorage.getItem('cabin-rebuild-mapper-v2')); if(d){Object.assign(state,d);}}catch{} }
 function toast(msg){ $('#selectionReadout').textContent=msg; clearTimeout(toast.t); toast.t=setTimeout(updateReadout,1800); }
 
 function resize(){
@@ -44,10 +44,91 @@ function pathFor(o,c=ctx){
   else if(o.type==='wedge'){c.moveTo(-w/2,h/2);c.lineTo(w/2,h/2);c.lineTo(w/2,-h/2);c.closePath();}
   else c.rect(-w/2,-h/2,w,h);
 }
+const rasterImageCache=new Map();
+function getRasterImage(src){
+  if(!src)return null;
+  let img=rasterImageCache.get(src);
+  if(!img){
+    img=new Image();
+    img.onload=()=>render2d();
+    img.src=src;
+    rasterImageCache.set(src,img);
+  }
+  return img;
+}
+function pathWorld(c,type,w,h){
+  c.beginPath();
+  if(type==='circle'||type==='log')c.ellipse(0,0,w/2,h/2,0,0,Math.PI*2);
+  else if(type==='triangle'){c.moveTo(0,-h/2);c.lineTo(w/2,h/2);c.lineTo(-w/2,h/2);c.closePath();}
+  else if(type==='trapezoid'){c.moveTo(-w*.32,-h/2);c.lineTo(w*.32,-h/2);c.lineTo(w/2,h/2);c.lineTo(-w/2,h/2);c.closePath();}
+  else if(type==='wedge'){c.moveTo(-w/2,h/2);c.lineTo(w/2,h/2);c.lineTo(w/2,-h/2);c.closePath();}
+  else c.rect(-w/2,-h/2,w,h);
+}
+function objectLocalCanvas(o,pxPerUnit=96){
+  const maxPx=1800;
+  let scale=Math.max(20,pxPerUnit);
+  scale=Math.min(scale,maxPx/Math.max(.01,o.w),maxPx/Math.max(.01,o.h));
+  const pad=4;
+  const out=document.createElement('canvas');
+  out.width=Math.max(2,Math.ceil(o.w*scale)+pad*2);
+  out.height=Math.max(2,Math.ceil(o.h*scale)+pad*2);
+  const c=out.getContext('2d');
+  c.setTransform(scale,0,0,scale,out.width/2,out.height/2);
+  if(o.rasterData){
+    const img=getRasterImage(o.rasterData);
+    if(img?.complete&&img.naturalWidth)c.drawImage(img,-o.w/2,-o.h/2,o.w,o.h);
+  }else if(o.operation==='compound'&&o.compoundParts?.length){
+    const sourceW=o.sourceW||o.w||1,sourceH=o.sourceH||o.h||1,sx=o.w/sourceW,sy=o.h/sourceH;
+    for(const part of o.compoundParts){
+      c.save();
+      c.globalCompositeOperation=part.mode||'source-over';
+      c.translate((part.x||0)*sx,(part.y||0)*sy);
+      c.rotate(part.rot||0);
+      pathWorld(c,part.type,(part.w||1)*sx,(part.h||1)*sy);
+      c.fillStyle='#000';c.fill();c.restore();
+    }
+  }else{
+    pathWorld(c,o.type,o.w,o.h);c.fillStyle='#000';c.fill();
+  }
+  return out;
+}
+function drawObjectIntoWorldCanvas(c,o,mode,bounds,scale){
+  const local=objectLocalCanvas(o,scale);
+  c.save();
+  c.globalCompositeOperation=mode;
+  c.translate((o.x-bounds.minX)*scale,(o.y-bounds.minY)*scale);
+  c.rotate(o.rot||0);
+  c.drawImage(local,-o.w*scale/2,-o.h*scale/2,o.w*scale,o.h*scale);
+  c.restore();
+}
+function rasterizeBoolean(sel,op,bounds){
+  const maxPx=1800;
+  const w=Math.max(.01,bounds.maxX-bounds.minX),h=Math.max(.01,bounds.maxY-bounds.minY);
+  let scale=Math.min(128,maxPx/w,maxPx/h);scale=Math.max(24,scale);
+  const out=document.createElement('canvas');out.width=Math.max(2,Math.ceil(w*scale));out.height=Math.max(2,Math.ceil(h*scale));
+  const c=out.getContext('2d');
+  if(op==='subtract'){
+    drawObjectIntoWorldCanvas(c,sel[0],'source-over',bounds,scale);
+    sel.slice(1).forEach(o=>drawObjectIntoWorldCanvas(c,o,'destination-out',bounds,scale));
+  }else if(op==='intersect'){
+    drawObjectIntoWorldCanvas(c,sel[0],'source-over',bounds,scale);
+    sel.slice(1).forEach(o=>drawObjectIntoWorldCanvas(c,o,'destination-in',bounds,scale));
+  }else if(op==='exclude'){
+    drawObjectIntoWorldCanvas(c,sel[0],'source-over',bounds,scale);
+    sel.slice(1).forEach(o=>drawObjectIntoWorldCanvas(c,o,'xor',bounds,scale));
+  }else sel.forEach(o=>drawObjectIntoWorldCanvas(c,o,'source-over',bounds,scale));
+  return out.toDataURL('image/png');
+}
 function drawCompoundObject(o,p){
-  // A boolean result is a self-contained shape. Its source geometry is stored
-  // in local coordinates, so moving, rotating, resizing, duplicating, saving,
-  // and using it in another boolean operation never depends on old objects.
+  if(o.rasterData){
+    const img=getRasterImage(o.rasterData);
+    if(img?.complete&&img.naturalWidth){
+      ctx.save();ctx.translate(p.x,p.y);ctx.rotate(o.rot||0);
+      ctx.drawImage(img,-o.w*state.zoom/2,-o.h*state.zoom/2,o.w*state.zoom,o.h*state.zoom);
+      ctx.restore();
+    }
+    return;
+  }
   const pad=28;
   const width=Math.max(2,Math.ceil(o.w*state.zoom+pad*2));
   const height=Math.max(2,Math.ceil(o.h*state.zoom+pad*2));
@@ -57,21 +138,13 @@ function drawCompoundObject(o,p){
   const sourceW=o.sourceW||o.w||1, sourceH=o.sourceH||o.h||1;
   const sx=o.w/sourceW, sy=o.h/sourceH;
   const drawPart=(part)=>{
-    oc.save();
-    oc.globalCompositeOperation=part.mode||'source-over';
-    oc.translate((part.x||0)*sx*state.zoom,(part.y||0)*sy*state.zoom);
-    oc.rotate(part.rot||0);
-    const temp={...part,w:(part.w||1)*sx,h:(part.h||1)*sy};
-    pathFor(temp,oc);
-    oc.fillStyle=part.color||o.color||'#8b6b45';
-    oc.fill();
-    oc.restore();
+    oc.save();oc.globalCompositeOperation=part.mode||'source-over';
+    oc.translate((part.x||0)*sx*state.zoom,(part.y||0)*sy*state.zoom);oc.rotate(part.rot||0);
+    const temp={...part,w:(part.w||1)*sx,h:(part.h||1)*sy};pathFor(temp,oc);
+    oc.fillStyle=part.color||o.color||'#8b6b45';oc.fill();oc.restore();
   };
   for(const part of o.compoundParts||[]) drawPart(part);
-  ctx.save();
-  ctx.translate(p.x,p.y); ctx.rotate(o.rot||0);
-  ctx.drawImage(off,-width/2,-height/2);
-  ctx.restore();
+  ctx.save();ctx.translate(p.x,p.y);ctx.rotate(o.rot||0);ctx.drawImage(off,-width/2,-height/2);ctx.restore();
 }
 function drawObject(o){
   const layer=state.layers.find(l=>l.name===o.layer); if(layer && !layer.visible)return;
@@ -282,28 +355,16 @@ function booleanOp(op){
   let bounds;
   if(op==='subtract') bounds=objectBounds(base);
   else{
-    const all=sel.map(objectBounds); bounds={minX:Math.min(...all.map(b=>b.minX)),maxX:Math.max(...all.map(b=>b.maxX)),minY:Math.min(...all.map(b=>b.minY)),maxY:Math.max(...all.map(b=>b.maxY))};
+    const all=sel.map(objectBounds);
+    bounds={minX:Math.min(...all.map(b=>b.minX)),maxX:Math.max(...all.map(b=>b.maxX)),minY:Math.min(...all.map(b=>b.minY)),maxY:Math.max(...all.map(b=>b.maxY))};
   }
-  const cx=(bounds.minX+bounds.maxX)/2,cy=(bounds.minY+bounds.maxY)/2,w=Math.max(.01,bounds.maxX-bounds.minX),h=Math.max(.01,bounds.maxY-bounds.minY);
-  let world=[];
-  if(op==='subtract'){
-    world.push(...shapeRecordsInWorld(base,'source-over'));
-    for(const cut of sel.slice(1))world.push(...shapeRecordsInWorld(cut,'destination-out'));
-  }else if(op==='intersect'){
-    world.push(...shapeRecordsInWorld(base,'source-over'));
-    for(const part of sel.slice(1))world.push(...shapeRecordsInWorld(part,'source-in'));
-  }else if(op==='exclude'){
-    world.push(...shapeRecordsInWorld(base,'source-over'));
-    for(const part of sel.slice(1))world.push(...shapeRecordsInWorld(part,'xor'));
-  }else{
-    for(const part of sel)world.push(...shapeRecordsInWorld(part,'source-over'));
-  }
-  const parts=world.map(part=>({...part,x:part.x-cx,y:part.y-cy,rot:part.rot||0}));
-  const n={...structuredClone(base),id:uid(),x:cx,y:cy,w,h,sourceW:w,sourceH:h,rot:0,operation:'compound',compoundParts:parts,label:base.label};
-  delete n.parentId; delete n.children; delete n.holes;
-  state.objects=state.objects.filter(o=>!sel.includes(o));
-  state.objects.push(n); state.selected=[n.id];
-  toast(`${op[0].toUpperCase()+op.slice(1)} created as editable shape`); renderAll();
+  const cx=(bounds.minX+bounds.maxX)/2,cy=(bounds.minY+bounds.maxY)/2;
+  const w=Math.max(.01,bounds.maxX-bounds.minX),h=Math.max(.01,bounds.maxY-bounds.minY);
+  const rasterData=rasterizeBoolean(sel,op,bounds);
+  const n={...structuredClone(base),id:uid(),x:cx,y:cy,w,h,sourceW:w,sourceH:h,rot:0,operation:'compound',compoundParts:[],rasterData,label:base.label};
+  delete n.parentId;delete n.children;delete n.holes;
+  state.objects=state.objects.filter(o=>!sel.includes(o));state.objects.push(n);state.selected=[n.id];
+  toast(`${op[0].toUpperCase()+op.slice(1)} created as a new movable shape`);renderAll();
 }
 function group(){const sel=selectedObjects();if(sel.length<2)return toast('Select multiple parts first');snapshot();const gid=uid();sel.forEach(o=>o.groupId=gid);toast('Parts fastened/grouped');renderAll()}
 function applyMaterial(name,color){selectedObjects().forEach(o=>{o.material=name;o.color=color});renderAll()}

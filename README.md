@@ -1,6 +1,6 @@
-# Cabin Rebuild Mapper — xTool UI v2.4
+# Cabin Rebuild Mapper — xTool UI v2.5
 
-## Fixed in v2.4
+## Fixed in v2.5
 
 - Boolean operations now create a **new, self-contained editable shape**.
 - Subtracted cutouts move with the resulting object instead of staying behind on the canvas.
