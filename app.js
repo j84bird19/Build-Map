@@ -79,34 +79,158 @@ function drawRulers(){const w=topRuler.clientWidth,h=leftRuler.clientHeight;tr.c
   const step=state.zoom; let start=Math.floor((-state.panX)/step)-1;for(let i=start;i<start+w/step+3;i++){let x=state.panX+i*step;tr.beginPath();tr.moveTo(x,32);tr.lineTo(x,i%5===0?14:23);tr.stroke();if(i%5===0)tr.fillText(i,x+3,12)}
   start=Math.floor((-state.panY)/step)-1;for(let i=start;i<start+h/step+3;i++){let y=state.panY+i*step;lr.beginPath();lr.moveTo(36,y);lr.lineTo(i%5===0?17:27,y);lr.stroke();if(i%5===0){lr.save();lr.translate(12,y-3);lr.rotate(-Math.PI/2);lr.fillText(i,0,0);lr.restore()}}
 }
-function hitTest(x,y){for(let i=state.objects.length-1;i>=0;i--){const o=state.objects[i];if(o.hidden||o.parentId)continue;const p=screenToWorld(x,y),dx=p.x-o.x,dy=p.y-o.y,cs=Math.cos(-(o.rot||0)),sn=Math.sin(-(o.rot||0)),lx=dx*cs-dy*sn,ly=dx*sn+dy*cs;if(Math.abs(lx)<=o.w/2&&Math.abs(ly)<=o.h/2)return o;}return null}
-function pointerPos(e){const r=canvas.getBoundingClientRect(),t=e.touches?.[0]||e;return{x:t.clientX-r.left,y:t.clientY-r.top}}
+function hitTest(x,y){
+  for(let i=state.objects.length-1;i>=0;i--){
+    const o=state.objects[i];
+    if(o.hidden||o.parentId)continue;
+    const p=screenToWorld(x,y),dx=p.x-o.x,dy=p.y-o.y;
+    const cs=Math.cos(-(o.rot||0)),sn=Math.sin(-(o.rot||0));
+    const lx=dx*cs-dy*sn,ly=dx*sn+dy*cs;
+    if(Math.abs(lx)<=o.w/2&&Math.abs(ly)<=o.h/2)return o;
+  }
+  return null;
+}
+function pointerPos(e){
+  const r=canvas.getBoundingClientRect();
+  return{x:e.clientX-r.left,y:e.clientY-r.top};
+}
+function selectedHandleAt(p){
+  if(state.selected.length!==1)return null;
+  const o=state.objects.find(x=>x.id===state.selected[0]);
+  if(!o||o.locked)return null;
+  const center=worldToScreen(o.x,o.y),dx=p.x-center.x,dy=p.y-center.y;
+  const cs=Math.cos(-(o.rot||0)),sn=Math.sin(-(o.rot||0));
+  const lx=dx*cs-dy*sn,ly=dx*sn+dy*cs;
+  const hw=o.w*state.zoom/2,hh=o.h*state.zoom/2,hit=18;
+  const corners=[[-hw,-hh,'nw'],[hw,-hh,'ne'],[hw,hh,'se'],[-hw,hh,'sw']];
+  for(const [x,y,name] of corners)if(Math.hypot(lx-x,ly-y)<=hit)return{type:'resize',corner:name,object:o};
+  if(Math.hypot(lx,ly-(-hh-36))<=20)return{type:'rotate',object:o};
+  return null;
+}
 const activePointers=new Map();
 let pinch=null;
 function selectInsideMarquee(rect){
   const x1=Math.min(rect.start.x,rect.end.x),x2=Math.max(rect.start.x,rect.end.x),y1=Math.min(rect.start.y,rect.end.y),y2=Math.max(rect.start.y,rect.end.y);
-  state.selected=state.objects.filter(o=>{if(o.hidden||o.parentId||o.locked)return false;const p=worldToScreen(o.x,o.y),hw=o.w*state.zoom/2,hh=o.h*state.zoom/2;return p.x-hw>=x1&&p.x+hw<=x2&&p.y-hh>=y1&&p.y+hh<=y2}).map(o=>o.id);
+  state.selected=state.objects.filter(o=>{
+    if(o.hidden||o.parentId||o.locked)return false;
+    const p=worldToScreen(o.x,o.y),hw=o.w*state.zoom/2,hh=o.h*state.zoom/2;
+    return p.x-hw>=x1&&p.x+hw<=x2&&p.y-hh>=y1&&p.y+hh<=y2;
+  }).map(o=>o.id);
+}
+function startPinch(){
+  if(activePointers.size<2)return;
+  const pts=[...activePointers.values()].slice(0,2);
+  const mid={x:(pts[0].x+pts[1].x)/2,y:(pts[0].y+pts[1].y)/2};
+  pinch={
+    startDistance:Math.max(10,Math.hypot(pts[1].x-pts[0].x,pts[1].y-pts[0].y)),
+    startZoom:state.zoom,
+    anchorWorld:screenToWorld(mid.x,mid.y)
+  };
+  drag=null;state.marquee=null;
 }
 canvas.addEventListener('pointerdown',e=>{
-  e.preventDefault();canvas.setPointerCapture(e.pointerId);const p=pointerPos(e);activePointers.set(e.pointerId,p);
-  if(activePointers.size===2){const pts=[...activePointers.values()],mid={x:(pts[0].x+pts[1].x)/2,y:(pts[0].y+pts[1].y)/2};pinch={distance:Math.hypot(pts[1].x-pts[0].x,pts[1].y-pts[0].y),zoom:state.zoom,world:screenToWorld(mid.x,mid.y),mid};drag=null;state.marquee=null;return}
+  if(e.pointerType==='touch')e.preventDefault();
+  canvas.setPointerCapture?.(e.pointerId);
+  const p=pointerPos(e);
+  activePointers.set(e.pointerId,p);
+  if(activePointers.size===2){startPinch();return;}
+  if(activePointers.size>2)return;
   const world=screenToWorld(p.x,p.y);
-  if(state.measureMode){state.measurePts.push(world);if(state.measurePts.length===2){const [a,b]=state.measurePts,d=Math.hypot(b.x-a.x,b.y-a.y);state.lastMeasurement={a,b,distance:d};state.measurePts=[];state.measureMode=false;toast(`Measured ${d.toFixed(3)} ${state.unit}`)}render2d();return}
+  if(state.measureMode){
+    state.measurePts.push(world);
+    if(state.measurePts.length===2){
+      const [a,b]=state.measurePts,d=Math.hypot(b.x-a.x,b.y-a.y);
+      state.lastMeasurement={a,b,distance:d};state.measurePts=[];state.measureMode=false;
+      toast(`Measured ${d.toFixed(3)} ${state.unit}`);
+    }
+    render2d();return;
+  }
+  const handle=selectedHandleAt(p);
+  if(handle){
+    snapshot();
+    drag={type:handle.type,objectId:handle.object.id,corner:handle.corner,startScreen:p,startRot:handle.object.rot||0,startW:handle.object.w,startH:handle.object.h,moved:false};
+    return;
+  }
   const o=hitTest(p.x,p.y);
-  if(o&&!o.locked){if(e.shiftKey||e.ctrlKey){state.selected=state.selected.includes(o.id)?state.selected.filter(id=>id!==o.id):[...state.selected,o.id]}else if(!state.selected.includes(o.id))state.selected=[o.id];snapshot();drag={start:world,startScreen:p,moved:false,orig:state.selected.map(id=>{const q=state.objects.find(o=>o.id===id);return{id,x:q.x,y:q.y}})}}
-  else {state.selected=[];state.marquee={start:p,end:p};drag={marquee:true,startScreen:p,moved:false}}
+  if(o&&!o.locked){
+    if(e.shiftKey||e.ctrlKey){state.selected=state.selected.includes(o.id)?state.selected.filter(id=>id!==o.id):[...state.selected,o.id]}
+    else if(!state.selected.includes(o.id))state.selected=[o.id];
+    snapshot();
+    drag={type:'move',start:world,startScreen:p,moved:false,orig:state.selected.map(id=>{const q=state.objects.find(o=>o.id===id);return{id,x:q.x,y:q.y}})};
+  }else{
+    state.selected=[];state.marquee={start:p,end:p};drag={type:'marquee',startScreen:p,moved:false};
+  }
   render2d();
 });
 canvas.addEventListener('pointermove',e=>{
-  if(!activePointers.has(e.pointerId))return;const p=pointerPos(e);activePointers.set(e.pointerId,p);
-  if(activePointers.size>=2&&pinch){const pts=[...activePointers.values()].slice(0,2),mid={x:(pts[0].x+pts[1].x)/2,y:(pts[0].y+pts[1].y)/2},dist=Math.max(10,Math.hypot(pts[1].x-pts[0].x,pts[1].y-pts[0].y));state.zoom=Math.max(12,Math.min(200,pinch.zoom*(dist/pinch.distance)));const projected=worldToScreen(pinch.world.x,pinch.world.y);state.panX+=mid.x-projected.x;state.panY+=mid.y-projected.y;pinch.world=screenToWorld(mid.x,mid.y);pinch.zoom=state.zoom;pinch.distance=dist;render2d();return}
+  if(!activePointers.has(e.pointerId))return;
+  const p=pointerPos(e);activePointers.set(e.pointerId,p);
+  if(activePointers.size>=2){
+    if(!pinch)startPinch();
+    const pts=[...activePointers.values()].slice(0,2);
+    const mid={x:(pts[0].x+pts[1].x)/2,y:(pts[0].y+pts[1].y)/2};
+    const dist=Math.max(10,Math.hypot(pts[1].x-pts[0].x,pts[1].y-pts[0].y));
+    state.zoom=Math.max(8,Math.min(320,pinch.startZoom*(dist/pinch.startDistance)));
+    state.panX=mid.x-pinch.anchorWorld.x*state.zoom;
+    state.panY=mid.y-pinch.anchorWorld.y*state.zoom;
+    render2d();return;
+  }
   if(!drag)return;
-  if(drag.marquee){drag.moved=Math.hypot(p.x-drag.startScreen.x,p.y-drag.startScreen.y)>7;if(drag.moved){state.marquee.end=p;selectInsideMarquee(state.marquee)}render2d();return}
-  const w=screenToWorld(p.x,p.y),dx=w.x-drag.start.x,dy=w.y-drag.start.y;drag.moved=drag.moved||Math.hypot(p.x-drag.startScreen.x,p.y-drag.startScreen.y)>4;for(const a of drag.orig){const o=state.objects.find(x=>x.id===a.id);o.x=snap(a.x+dx);o.y=snap(a.y+dy)}render2d();
+  drag.moved=drag.moved||Math.hypot(p.x-drag.startScreen.x,p.y-drag.startScreen.y)>4;
+  if(drag.type==='marquee'){
+    if(drag.moved){state.marquee.end=p;selectInsideMarquee(state.marquee)}
+    render2d();return;
+  }
+  const o=drag.objectId&&state.objects.find(x=>x.id===drag.objectId);
+  if(drag.type==='rotate'&&o){
+    const w=screenToWorld(p.x,p.y);
+    let angle=Math.atan2(w.y-o.y,w.x-o.x)+Math.PI/2;
+    if(state.snap){const step=Math.PI/180;angle=Math.round(angle/step)*step;}
+    o.rot=angle;render2d();return;
+  }
+  if(drag.type==='resize'&&o){
+    const w=screenToWorld(p.x,p.y),dx=w.x-o.x,dy=w.y-o.y;
+    const cs=Math.cos(-(o.rot||0)),sn=Math.sin(-(o.rot||0));
+    const lx=dx*cs-dy*sn,ly=dx*sn+dy*cs;
+    const minWorld=Math.max(.08,10/state.zoom);
+    o.w=Math.max(minWorld,state.snap?Math.max(state.grid,Math.round((Math.abs(lx)*2)/state.grid)*state.grid):Math.abs(lx)*2);
+    o.h=Math.max(minWorld,state.snap?Math.max(state.grid,Math.round((Math.abs(ly)*2)/state.grid)*state.grid):Math.abs(ly)*2);
+    render2d();return;
+  }
+  if(drag.type==='move'){
+    const w=screenToWorld(p.x,p.y),dx=w.x-drag.start.x,dy=w.y-drag.start.y;
+    for(const a of drag.orig){const obj=state.objects.find(x=>x.id===a.id);if(obj){obj.x=snap(a.x+dx);obj.y=snap(a.y+dy)}}
+    render2d();
+  }
 });
-function finishPointer(e){activePointers.delete(e.pointerId);if(activePointers.size<2)pinch=null;if(drag?.marquee&&!drag.moved){state.marquee=null;state.selected=[]}else if(drag?.marquee){state.marquee=null}drag=null;renderParts();sync3d();render2d()}
-canvas.addEventListener('pointerup',finishPointer);canvas.addEventListener('pointercancel',finishPointer);
-canvas.addEventListener('wheel',e=>{e.preventDefault();const p=pointerPos(e),before=screenToWorld(p.x,p.y),factor=e.deltaY<0?1.1:.9;state.zoom=Math.max(12,Math.min(200,state.zoom*factor));const after=worldToScreen(before.x,before.y);state.panX+=p.x-after.x;state.panY+=p.y-after.y;render2d()},{passive:false});
+function finishPointer(e){
+  activePointers.delete(e.pointerId);
+  if(activePointers.size<2)pinch=null;
+  if(activePointers.size===1){
+    // Do not start a one-finger drag after a pinch; wait for a fresh touch.
+    drag=null;
+  }else if(activePointers.size===0){
+    if(drag?.type==='marquee'&&!drag.moved){state.marquee=null;state.selected=[]}
+    else if(drag?.type==='marquee')state.marquee=null;
+    drag=null;
+    renderParts();sync3d();render2d();
+  }
+}
+canvas.addEventListener('pointerup',finishPointer);
+canvas.addEventListener('pointercancel',finishPointer);
+canvas.addEventListener('lostpointercapture',e=>{if(activePointers.has(e.pointerId))finishPointer(e)});
+canvas.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const p=pointerPos(e),before=screenToWorld(p.x,p.y),factor=e.deltaY<0?1.1:.9;
+  state.zoom=Math.max(8,Math.min(320,state.zoom*factor));
+  state.panX=p.x-before.x*state.zoom;state.panY=p.y-before.y*state.zoom;
+  render2d();
+},{passive:false});
+// Samsung/Android browser fallback: block page-level pinch/pan while working on the canvas.
+for(const el of [canvas,$('#canvasWrap'),$('#designView')]){
+  el.addEventListener('touchstart',e=>e.preventDefault(),{passive:false});
+  el.addEventListener('touchmove',e=>e.preventDefault(),{passive:false});
+}
 
 function addObject(type='rect',data={}){snapshot();const i=state.objects.length+1,o={id:uid(),type,label:data.label||`P-${String(i).padStart(3,'0')}`,x:data.x??4,y:data.y??4,w:+(data.w??4),h:+(data.h??1),depth:+(data.depth??1),rot:0,color:data.color||'#8b6b45',material:data.material||'Wood',layer:data.layer||'Front Wall',notes:data.notes||'',unit:data.unit||state.unit,hidden:false,locked:false};state.objects.push(o);state.selected=[o.id];renderAll();return o}
 function selectedObjects(){return state.selected.map(id=>state.objects.find(o=>o.id===id)).filter(Boolean)}

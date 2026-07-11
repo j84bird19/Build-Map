@@ -36,8 +36,17 @@ This version loads Three.js from the unpkg CDN. The 2D editor and saved project 
 
 The current build preserves editable compound-shape definitions and visual subtraction in 2D. Full watertight 3D CSG solids should be added in the next engine pass before using exported geometry for fabrication or structural measurements.
 
-## v2.1 touch and field-use update
+## v2.2 touch and field-use update
 - Two-finger pinch zoom on the 2D canvas, centered between the fingers.
 - Tap an object to select it; drag a selection box across empty canvas to select multiple objects.
 - Measure mode now draws the measured line, endpoint markers, and the numeric result directly on the canvas; the latest result also appears when Measure is reopened.
 - Layer lock controls now use clear closed-lock and open-lock icons.
+
+
+## v2.2 interaction corrections
+
+- Two-finger pinch now changes canvas scale around the midpoint between both fingers.
+- Browser page panning/zooming is blocked while touching the drafting workspace.
+- Selected objects can be resized from any corner handle.
+- Selected objects can be rotated from the round handle above the object.
+- The top and left rulers stay fixed as a frame around the work area while the design moves beneath them.
