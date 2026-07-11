@@ -45,22 +45,33 @@ function pathFor(o,c=ctx){
   else c.rect(-w/2,-h/2,w,h);
 }
 function drawCompoundObject(o,p){
-  // Boolean work is composited on a transparent offscreen canvas first. This keeps
-  // Subtract/Exclude from erasing the drafting grid or any unrelated objects.
-  const pad=24;
+  // A boolean result is a self-contained shape. Its source geometry is stored
+  // in local coordinates, so moving, rotating, resizing, duplicating, saving,
+  // and using it in another boolean operation never depends on old objects.
+  const pad=28;
   const width=Math.max(2,Math.ceil(o.w*state.zoom+pad*2));
   const height=Math.max(2,Math.ceil(o.h*state.zoom+pad*2));
-  const off=document.createElement('canvas');off.width=width;off.height=height;
-  const oc=off.getContext('2d');oc.translate(width/2,height/2);
-  const drawPart=(part,mode='source-over')=>{
-    oc.save();oc.globalCompositeOperation=mode;
-    oc.translate((part.x-o.x)*state.zoom,(part.y-o.y)*state.zoom);
-    oc.rotate((part.rot||0)-(o.rot||0));pathFor(part,oc);oc.fillStyle=o.color||'#8b6b45';oc.fill();oc.restore();
+  const off=document.createElement('canvas'); off.width=width; off.height=height;
+  const oc=off.getContext('2d');
+  oc.translate(width/2,height/2);
+  const sourceW=o.sourceW||o.w||1, sourceH=o.sourceH||o.h||1;
+  const sx=o.w/sourceW, sy=o.h/sourceH;
+  const drawPart=(part)=>{
+    oc.save();
+    oc.globalCompositeOperation=part.mode||'source-over';
+    oc.translate((part.x||0)*sx*state.zoom,(part.y||0)*sy*state.zoom);
+    oc.rotate(part.rot||0);
+    const temp={...part,w:(part.w||1)*sx,h:(part.h||1)*sy};
+    pathFor(temp,oc);
+    oc.fillStyle=part.color||o.color||'#8b6b45';
+    oc.fill();
+    oc.restore();
   };
-  for(const cid of o.children||[]){const ch=state.objects.find(x=>x.id===cid);if(ch)drawPart(ch);}
-  for(const hole of o.holes||[])drawPart(hole,'destination-out');
-  ctx.save();ctx.translate(p.x,p.y);ctx.rotate(o.rot||0);ctx.drawImage(off,-width/2,-height/2);
-  ctx.strokeStyle='#45494c';ctx.lineWidth=1.2;ctx.strokeRect(-o.w*state.zoom/2,-o.h*state.zoom/2,o.w*state.zoom,o.h*state.zoom);ctx.restore();
+  for(const part of o.compoundParts||[]) drawPart(part);
+  ctx.save();
+  ctx.translate(p.x,p.y); ctx.rotate(o.rot||0);
+  ctx.drawImage(off,-width/2,-height/2);
+  ctx.restore();
 }
 function drawObject(o){
   const layer=state.layers.find(l=>l.name===o.layer); if(layer && !layer.visible)return;
@@ -251,8 +262,49 @@ function addObject(type='rect',data={}){snapshot();const i=state.objects.length+
 function selectedObjects(){return state.selected.map(id=>state.objects.find(o=>o.id===id)).filter(Boolean)}
 function duplicate(){const sel=selectedObjects();if(!sel.length)return;snapshot();state.selected=[];for(const o of sel){const n={...structuredClone(o),id:uid(),x:o.x+.5,y:o.y+.5,label:o.label};delete n.parentId;state.objects.push(n);state.selected.push(n.id)}renderAll()}
 function removeSelected(){if(!state.selected.length)return;snapshot();state.objects=state.objects.filter(o=>!state.selected.includes(o.id));state.selected=[];renderAll()}
-function booleanOp(op){const sel=selectedObjects();if(sel.length<2){toast('Select at least two objects');return}snapshot();const base=sel[0], rest=sel.slice(1);if(op==='subtract'){base.operation='compound';base.children=base.children||[base.id];base.holes=[...(base.holes||[]),...rest.map(r=>structuredClone(r))];state.objects=state.objects.filter(o=>!rest.includes(o));state.selected=[base.id];toast('Subtracted from primary object');}
-else{const minX=Math.min(...sel.map(o=>o.x-o.w/2)),maxX=Math.max(...sel.map(o=>o.x+o.w/2)),minY=Math.min(...sel.map(o=>o.y-o.h/2)),maxY=Math.max(...sel.map(o=>o.y+o.h/2));const n={...structuredClone(base),id:uid(),x:(minX+maxX)/2,y:(minY+maxY)/2,w:maxX-minX,h:maxY-minY,operation:'compound',children:sel.map(o=>o.id),holes:[],label:base.label};for(const o of sel)o.parentId=n.id;state.objects.push(n);state.selected=[n.id];toast(`${op} created`)}renderAll()}
+function objectCorners(o){
+  const c=Math.cos(o.rot||0),s=Math.sin(o.rot||0),hw=o.w/2,hh=o.h/2;
+  return [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]].map(([x,y])=>({x:o.x+x*c-y*s,y:o.y+x*s+y*c}));
+}
+function objectBounds(o){const pts=objectCorners(o);return{minX:Math.min(...pts.map(p=>p.x)),maxX:Math.max(...pts.map(p=>p.x)),minY:Math.min(...pts.map(p=>p.y)),maxY:Math.max(...pts.map(p=>p.y))}}
+function shapeRecordsInWorld(o,mode='source-over'){
+  if(o.operation!=='compound'||!o.compoundParts?.length){return[{type:o.type,x:o.x,y:o.y,w:o.w,h:o.h,rot:o.rot||0,color:o.color,mode}]}
+  const sourceW=o.sourceW||o.w||1,sourceH=o.sourceH||o.h||1,sx=o.w/sourceW,sy=o.h/sourceH,c=Math.cos(o.rot||0),s=Math.sin(o.rot||0);
+  return o.compoundParts.map(part=>{
+    const lx=(part.x||0)*sx,ly=(part.y||0)*sy;
+    return{...structuredClone(part),x:o.x+lx*c-ly*s,y:o.y+lx*s+ly*c,w:(part.w||1)*sx,h:(part.h||1)*sy,rot:(part.rot||0)+(o.rot||0),mode:mode==='destination-out'?'destination-out':(part.mode||mode)};
+  });
+}
+function booleanOp(op){
+  const sel=selectedObjects(); if(sel.length<2){toast('Select at least two objects');return}
+  snapshot();
+  const base=sel[0];
+  let bounds;
+  if(op==='subtract') bounds=objectBounds(base);
+  else{
+    const all=sel.map(objectBounds); bounds={minX:Math.min(...all.map(b=>b.minX)),maxX:Math.max(...all.map(b=>b.maxX)),minY:Math.min(...all.map(b=>b.minY)),maxY:Math.max(...all.map(b=>b.maxY))};
+  }
+  const cx=(bounds.minX+bounds.maxX)/2,cy=(bounds.minY+bounds.maxY)/2,w=Math.max(.01,bounds.maxX-bounds.minX),h=Math.max(.01,bounds.maxY-bounds.minY);
+  let world=[];
+  if(op==='subtract'){
+    world.push(...shapeRecordsInWorld(base,'source-over'));
+    for(const cut of sel.slice(1))world.push(...shapeRecordsInWorld(cut,'destination-out'));
+  }else if(op==='intersect'){
+    world.push(...shapeRecordsInWorld(base,'source-over'));
+    for(const part of sel.slice(1))world.push(...shapeRecordsInWorld(part,'source-in'));
+  }else if(op==='exclude'){
+    world.push(...shapeRecordsInWorld(base,'source-over'));
+    for(const part of sel.slice(1))world.push(...shapeRecordsInWorld(part,'xor'));
+  }else{
+    for(const part of sel)world.push(...shapeRecordsInWorld(part,'source-over'));
+  }
+  const parts=world.map(part=>({...part,x:part.x-cx,y:part.y-cy,rot:part.rot||0}));
+  const n={...structuredClone(base),id:uid(),x:cx,y:cy,w,h,sourceW:w,sourceH:h,rot:0,operation:'compound',compoundParts:parts,label:base.label};
+  delete n.parentId; delete n.children; delete n.holes;
+  state.objects=state.objects.filter(o=>!sel.includes(o));
+  state.objects.push(n); state.selected=[n.id];
+  toast(`${op[0].toUpperCase()+op.slice(1)} created as editable shape`); renderAll();
+}
 function group(){const sel=selectedObjects();if(sel.length<2)return toast('Select multiple parts first');snapshot();const gid=uid();sel.forEach(o=>o.groupId=gid);toast('Parts fastened/grouped');renderAll()}
 function applyMaterial(name,color){selectedObjects().forEach(o=>{o.material=name;o.color=color});renderAll()}
 
