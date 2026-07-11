@@ -9,7 +9,7 @@ const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
 const state = {
   objects: [], selected: [], layers: [{name:'Front Wall', visible:true, locked:false, color:'#22c44b'}],
   unit:'ft', zoom:42, panX:70, panY:55, snap:true, grid:0.5, undo:[], redo:[],
-  activeView:'design', measureMode:false, measurePts:[]
+  activeView:'design', measureMode:false, measurePts:[], lastMeasurement:null, marquee:null
 };
 
 const canvas = $('#designCanvas'), ctx = canvas.getContext('2d');
@@ -66,7 +66,13 @@ function render2d(){
   for(let x=((state.panX%major)+major)%major;x<w;x+=major){ctx.strokeStyle='#d9dcde';ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke()}
   for(let y=((state.panY%major)+major)%major;y<h;y+=major){ctx.strokeStyle='#d9dcde';ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}
   state.objects.filter(o=>!o.hidden&&!o.parentId).forEach(drawObject);
-  if(state.measurePts.length){ctx.fillStyle='#e64';for(const p of state.measurePts){const s=worldToScreen(p.x,p.y);ctx.beginPath();ctx.arc(s.x,s.y,5,0,Math.PI*2);ctx.fill()}}
+  if(state.lastMeasurement){
+    const a=worldToScreen(state.lastMeasurement.a.x,state.lastMeasurement.a.y),b=worldToScreen(state.lastMeasurement.b.x,state.lastMeasurement.b.y);
+    ctx.save();ctx.strokeStyle='#e65d35';ctx.fillStyle='#e65d35';ctx.lineWidth=2;ctx.setLineDash([7,5]);ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();ctx.setLineDash([]);
+    for(const pt of [a,b]){ctx.beginPath();ctx.arc(pt.x,pt.y,5,0,Math.PI*2);ctx.fill()}
+    const mx=(a.x+b.x)/2,my=(a.y+b.y)/2,label=`${state.lastMeasurement.distance.toFixed(3)} ${state.unit}`;ctx.font='700 13px system-ui';const tw=ctx.measureText(label).width;ctx.fillStyle='rgba(255,255,255,.94)';ctx.fillRect(mx-tw/2-7,my-24,tw+14,22);ctx.fillStyle='#b53e20';ctx.textAlign='center';ctx.fillText(label,mx,my-8);ctx.restore();
+  } else if(state.measurePts.length){ctx.fillStyle='#e65d35';for(const p of state.measurePts){const sp=worldToScreen(p.x,p.y);ctx.beginPath();ctx.arc(sp.x,sp.y,5,0,Math.PI*2);ctx.fill()}}
+  if(state.marquee){const x=Math.min(state.marquee.start.x,state.marquee.end.x),y=Math.min(state.marquee.start.y,state.marquee.end.y),w=Math.abs(state.marquee.end.x-state.marquee.start.x),h=Math.abs(state.marquee.end.y-state.marquee.start.y);ctx.save();ctx.fillStyle='rgba(21,149,142,.12)';ctx.strokeStyle='#15958e';ctx.lineWidth=1.5;ctx.setLineDash([6,4]);ctx.fillRect(x,y,w,h);ctx.strokeRect(x,y,w,h);ctx.restore()}
   drawRulers(); updateReadout();
 }
 function drawRulers(){const w=topRuler.clientWidth,h=leftRuler.clientHeight;tr.clearRect(0,0,w,32);lr.clearRect(0,0,36,h);tr.fillStyle=lr.fillStyle='#f4f5f5';tr.fillRect(0,0,w,32);lr.fillRect(0,0,36,h);tr.strokeStyle=lr.strokeStyle='#aeb3b6';tr.fillStyle=lr.fillStyle='#666';tr.font=lr.font='11px system-ui';
@@ -75,10 +81,32 @@ function drawRulers(){const w=topRuler.clientWidth,h=leftRuler.clientHeight;tr.c
 }
 function hitTest(x,y){for(let i=state.objects.length-1;i>=0;i--){const o=state.objects[i];if(o.hidden||o.parentId)continue;const p=screenToWorld(x,y),dx=p.x-o.x,dy=p.y-o.y,cs=Math.cos(-(o.rot||0)),sn=Math.sin(-(o.rot||0)),lx=dx*cs-dy*sn,ly=dx*sn+dy*cs;if(Math.abs(lx)<=o.w/2&&Math.abs(ly)<=o.h/2)return o;}return null}
 function pointerPos(e){const r=canvas.getBoundingClientRect(),t=e.touches?.[0]||e;return{x:t.clientX-r.left,y:t.clientY-r.top}}
-canvas.addEventListener('pointerdown',e=>{canvas.setPointerCapture(e.pointerId);const p=pointerPos(e),world=screenToWorld(p.x,p.y);if(state.measureMode){state.measurePts.push(world);if(state.measurePts.length===2){const [a,b]=state.measurePts,d=Math.hypot(b.x-a.x,b.y-a.y);$('#measureResult')&&($('#measureResult').textContent=`${d.toFixed(3)} ${state.unit}`);state.measureMode=false;toast(`Measured ${d.toFixed(3)} ${state.unit}`)}render2d();return}const o=hitTest(p.x,p.y);if(o&&!o.locked){if(e.shiftKey||e.ctrlKey){state.selected=state.selected.includes(o.id)?state.selected.filter(id=>id!==o.id):[...state.selected,o.id]}else if(!state.selected.includes(o.id))state.selected=[o.id];snapshot();drag={start:world,orig:state.selected.map(id=>{const q=state.objects.find(o=>o.id===id);return{id,x:q.x,y:q.y}})};}else{state.selected=[];drag={pan:true,start:p,px:state.panX,py:state.panY}}render2d();});
-canvas.addEventListener('pointermove',e=>{if(!drag)return;const p=pointerPos(e);if(drag.pan){state.panX=drag.px+p.x-drag.start.x;state.panY=drag.py+p.y-drag.start.y}else{const w=screenToWorld(p.x,p.y),dx=w.x-drag.start.x,dy=w.y-drag.start.y;for(const a of drag.orig){const o=state.objects.find(x=>x.id===a.id);o.x=snap(a.x+dx);o.y=snap(a.y+dy)}}render2d();});
-canvas.addEventListener('pointerup',()=>{drag=null;renderParts();sync3d();});
-canvas.addEventListener('wheel',e=>{e.preventDefault();const p=pointerPos(e),before=screenToWorld(p.x,p.y),factor=e.deltaY<0?1.1:.9;state.zoom=Math.max(12,Math.min(160,state.zoom*factor));const after=worldToScreen(before.x,before.y);state.panX+=p.x-after.x;state.panY+=p.y-after.y;render2d()},{passive:false});
+const activePointers=new Map();
+let pinch=null;
+function selectInsideMarquee(rect){
+  const x1=Math.min(rect.start.x,rect.end.x),x2=Math.max(rect.start.x,rect.end.x),y1=Math.min(rect.start.y,rect.end.y),y2=Math.max(rect.start.y,rect.end.y);
+  state.selected=state.objects.filter(o=>{if(o.hidden||o.parentId||o.locked)return false;const p=worldToScreen(o.x,o.y),hw=o.w*state.zoom/2,hh=o.h*state.zoom/2;return p.x-hw>=x1&&p.x+hw<=x2&&p.y-hh>=y1&&p.y+hh<=y2}).map(o=>o.id);
+}
+canvas.addEventListener('pointerdown',e=>{
+  e.preventDefault();canvas.setPointerCapture(e.pointerId);const p=pointerPos(e);activePointers.set(e.pointerId,p);
+  if(activePointers.size===2){const pts=[...activePointers.values()],mid={x:(pts[0].x+pts[1].x)/2,y:(pts[0].y+pts[1].y)/2};pinch={distance:Math.hypot(pts[1].x-pts[0].x,pts[1].y-pts[0].y),zoom:state.zoom,world:screenToWorld(mid.x,mid.y),mid};drag=null;state.marquee=null;return}
+  const world=screenToWorld(p.x,p.y);
+  if(state.measureMode){state.measurePts.push(world);if(state.measurePts.length===2){const [a,b]=state.measurePts,d=Math.hypot(b.x-a.x,b.y-a.y);state.lastMeasurement={a,b,distance:d};state.measurePts=[];state.measureMode=false;toast(`Measured ${d.toFixed(3)} ${state.unit}`)}render2d();return}
+  const o=hitTest(p.x,p.y);
+  if(o&&!o.locked){if(e.shiftKey||e.ctrlKey){state.selected=state.selected.includes(o.id)?state.selected.filter(id=>id!==o.id):[...state.selected,o.id]}else if(!state.selected.includes(o.id))state.selected=[o.id];snapshot();drag={start:world,startScreen:p,moved:false,orig:state.selected.map(id=>{const q=state.objects.find(o=>o.id===id);return{id,x:q.x,y:q.y}})}}
+  else {state.selected=[];state.marquee={start:p,end:p};drag={marquee:true,startScreen:p,moved:false}}
+  render2d();
+});
+canvas.addEventListener('pointermove',e=>{
+  if(!activePointers.has(e.pointerId))return;const p=pointerPos(e);activePointers.set(e.pointerId,p);
+  if(activePointers.size>=2&&pinch){const pts=[...activePointers.values()].slice(0,2),mid={x:(pts[0].x+pts[1].x)/2,y:(pts[0].y+pts[1].y)/2},dist=Math.max(10,Math.hypot(pts[1].x-pts[0].x,pts[1].y-pts[0].y));state.zoom=Math.max(12,Math.min(200,pinch.zoom*(dist/pinch.distance)));const projected=worldToScreen(pinch.world.x,pinch.world.y);state.panX+=mid.x-projected.x;state.panY+=mid.y-projected.y;pinch.world=screenToWorld(mid.x,mid.y);pinch.zoom=state.zoom;pinch.distance=dist;render2d();return}
+  if(!drag)return;
+  if(drag.marquee){drag.moved=Math.hypot(p.x-drag.startScreen.x,p.y-drag.startScreen.y)>7;if(drag.moved){state.marquee.end=p;selectInsideMarquee(state.marquee)}render2d();return}
+  const w=screenToWorld(p.x,p.y),dx=w.x-drag.start.x,dy=w.y-drag.start.y;drag.moved=drag.moved||Math.hypot(p.x-drag.startScreen.x,p.y-drag.startScreen.y)>4;for(const a of drag.orig){const o=state.objects.find(x=>x.id===a.id);o.x=snap(a.x+dx);o.y=snap(a.y+dy)}render2d();
+});
+function finishPointer(e){activePointers.delete(e.pointerId);if(activePointers.size<2)pinch=null;if(drag?.marquee&&!drag.moved){state.marquee=null;state.selected=[]}else if(drag?.marquee){state.marquee=null}drag=null;renderParts();sync3d();render2d()}
+canvas.addEventListener('pointerup',finishPointer);canvas.addEventListener('pointercancel',finishPointer);
+canvas.addEventListener('wheel',e=>{e.preventDefault();const p=pointerPos(e),before=screenToWorld(p.x,p.y),factor=e.deltaY<0?1.1:.9;state.zoom=Math.max(12,Math.min(200,state.zoom*factor));const after=worldToScreen(before.x,before.y);state.panX+=p.x-after.x;state.panY+=p.y-after.y;render2d()},{passive:false});
 
 function addObject(type='rect',data={}){snapshot();const i=state.objects.length+1,o={id:uid(),type,label:data.label||`P-${String(i).padStart(3,'0')}`,x:data.x??4,y:data.y??4,w:+(data.w??4),h:+(data.h??1),depth:+(data.depth??1),rot:0,color:data.color||'#8b6b45',material:data.material||'Wood',layer:data.layer||'Front Wall',notes:data.notes||'',unit:data.unit||state.unit,hidden:false,locked:false};state.objects.push(o);state.selected=[o.id];renderAll();return o}
 function selectedObjects(){return state.selected.map(id=>state.objects.find(o=>o.id===id)).filter(Boolean)}
@@ -99,10 +127,10 @@ function wirePanel(name){
  if(name==='layers'){renderLayerPanel();$('#addLayerBtn').onclick=()=>{const n=prompt('Layer name');if(n){ensureLayer(n);renderLayerPanel();renderAll()}}}
  if(name==='materials'){$$('[data-material]',$('#sheetContent')).forEach(b=>b.onclick=()=>{applyMaterial(b.dataset.material,b.dataset.color);closePanel()});$('#customMaterialColor').oninput=e=>applyMaterial('Custom',e.target.value)}
  if(name==='settings'){ $('#duplicateBtn').onclick=duplicate;$('#deleteBtn').onclick=removeSelected;$('#groupBtn').onclick=group;$('#ungroupBtn').onclick=()=>{selectedObjects().forEach(o=>delete o.groupId);renderAll()};$('#uniteBtn').onclick=()=>booleanOp('unite');$('#subtractBtn').onclick=()=>booleanOp('subtract');$('#intersectBtn').onclick=()=>booleanOp('intersect');$('#excludeBtn').onclick=()=>booleanOp('exclude');$('#lockBtn').onclick=()=>{selectedObjects().forEach(o=>o.locked=!o.locked);renderAll()};$('#hideBtn').onclick=()=>{selectedObjects().forEach(o=>o.hidden=true);state.selected=[];renderAll()};$('#snapToggle').checked=state.snap;$('#snapToggle').onchange=e=>state.snap=e.target.checked;$('#gridSize').value=state.grid;$('#gridSize').onchange=e=>{state.grid=+e.target.value;render2d()};$('#clearProjectBtn').onclick=()=>{if(confirm('Clear the entire project?')){snapshot();state.objects=[];state.selected=[];renderAll();closePanel()}} }
- if(name==='measure')$('#measureModeBtn').onclick=()=>{state.measureMode=true;state.measurePts=[];closePanel();toast('Tap two points to measure')};
+ if(name==='measure'){const result=$('#measureResult');if(result&&state.lastMeasurement)result.textContent=`${state.lastMeasurement.distance.toFixed(3)} ${state.unit}`;$('#measureModeBtn').onclick=()=>{state.measureMode=true;state.measurePts=[];state.lastMeasurement=null;closePanel();toast('Tap two points to measure')}};
 }
 function ensureLayer(name){if(!state.layers.some(l=>l.name===name))state.layers.push({name,visible:true,locked:false,color:`hsl(${Math.random()*360} 60% 50%)`})}
-function renderLayerPanel(){const host=$('#layerPanelList');if(!host)return;host.innerHTML=state.layers.map((l,i)=>`<div class="layer-row"><input type="checkbox" data-vis="${i}" ${l.visible?'checked':''}><span><i class="layer-dot" style="background:${l.color};display:inline-block;margin-right:7px"></i>${l.name}</span><button data-lock="${i}">${l.locked?'🔒':'🔓'}</button></div>`).join('');$$('[data-vis]',host).forEach(x=>x.onchange=()=>{state.layers[+x.dataset.vis].visible=x.checked;renderAll()});$$('[data-lock]',host).forEach(x=>x.onclick=()=>{const l=state.layers[+x.dataset.lock];l.locked=!l.locked;state.objects.filter(o=>o.layer===l.name).forEach(o=>o.locked=l.locked);renderLayerPanel();renderAll()})}
+function renderLayerPanel(){const host=$('#layerPanelList');if(!host)return;const icon=l=>l.locked?`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V7a5 5 0 0 1 10 0v3h1.5A1.5 1.5 0 0 1 20 11.5v8A1.5 1.5 0 0 1 18.5 21h-13A1.5 1.5 0 0 1 4 19.5v-8A1.5 1.5 0 0 1 5.5 10H7Zm2 0h6V7a3 3 0 0 0-6 0v3Z"/></svg>`:`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 10V7a5 5 0 0 0-9.9-1H9.2A3 3 0 0 1 15 7v3H5.5A1.5 1.5 0 0 0 4 11.5v8A1.5 1.5 0 0 0 5.5 21h13a1.5 1.5 0 0 0 1.5-1.5v-8a1.5 1.5 0 0 0-1.5-1.5H17Z"/></svg>`;host.innerHTML=state.layers.map((l,i)=>`<div class="layer-row"><input type="checkbox" data-vis="${i}" ${l.visible?'checked':''}><span><i class="layer-dot" style="background:${l.color};display:inline-block;margin-right:7px"></i>${l.name}</span><button class="layer-lock ${l.locked?'is-locked':''}" data-lock="${i}" aria-label="${l.locked?'Unlock':'Lock'} ${l.name}">${icon(l)}</button></div>`).join('');$$('[data-vis]',host).forEach(x=>x.onchange=()=>{state.layers[+x.dataset.vis].visible=x.checked;renderAll()});$$('[data-lock]',host).forEach(x=>x.onclick=()=>{const l=state.layers[+x.dataset.lock];l.locked=!l.locked;state.objects.filter(o=>o.layer===l.name).forEach(o=>o.locked=l.locked);renderLayerPanel();renderAll()})}
 function updateReadout(){const s=selectedObjects();if(!s.length)$('#selectionReadout').textContent='Cabin Rebuild Mapper';else if(s.length===1){const o=s[0];$('#selectionReadout').textContent=`${o.w.toFixed(3)} × ${o.h.toFixed(3)} ${o.unit||state.unit}   X:${o.x.toFixed(3)} Y:${o.y.toFixed(3)}`}else $('#selectionReadout').textContent=`${s.length} objects selected`}
 function renderParts(){const q=($('#partsSearch')?.value||'').toLowerCase();const rows=state.objects.filter(o=>!o.parentId).filter(o=>`${o.label} ${o.layer} ${o.material}`.toLowerCase().includes(q));$('#partsTable').innerHTML=rows.length?rows.map(o=>`<article class="part-card" data-id="${o.id}"><h3>${o.label||'Unlabeled part'}</h3><div class="part-meta"><span>${o.w} × ${o.h} × ${o.depth} ${o.unit||state.unit}</span><span>${o.material}</span><span>${o.layer}</span><span>${o.hidden?'Hidden':''}${o.locked?' Locked':''}</span></div>${o.notes?`<p>${o.notes}</p>`:''}</article>`).join(''):'<p>No parts yet.</p>';$$('.part-card').forEach(c=>c.onclick=()=>{state.selected=[c.dataset.id];switchView('design');renderAll()})}
 
