@@ -380,8 +380,62 @@ function wirePanel(name){
    $('#saveCustomShapeBtn').onclick=saveSelectedCustomShape;
  }
  if(name==='parts'){
+   const selected=selectedObjects();
+   const o=selected.length===1?selected[0]:null;
+   const button=$('#addPartBtn');
+   const colorInput=$('#partColor');
+   const colorTrigger=$('#partColorTrigger');
+
+   if(o){
+     $('#partName').value=o.name||'';
+     $('#partLabel').value=o.label||'';
+     $('#partLength').value=o.w??'';
+     $('#partHeight').value=o.h??'';
+     $('#partDepth').value=o.depth??'';
+     $('#partUnits').value=o.unit||state.unit;
+     $('#partLayer').value=o.layer||'';
+     $('#partMaterial').value=o.material||'';
+     colorInput.value=o.color||'#8b6b45';
+     colorTrigger.querySelector('i').style.background=colorInput.value;
+     colorTrigger.querySelector('span').textContent=colorInput.value.toUpperCase();
+     $('#partNotes').value=o.notes||'';
+     button.textContent='Update Selected Part';
+   }else if(selected.length>1){
+     button.textContent=`${selected.length} Parts Selected`;
+     button.disabled=true;
+     toast('Select one part to edit its name and properties');
+   }else{
+     $('#partName').value='';
+     $('#partLabel').value='';
+     $('#partNotes').value='';
+     button.textContent='Create Part';
+   }
+
    wireColorTrigger('#partColorTrigger','#partColor');
-   $('#addPartBtn').onclick=()=>{const unit=$('#partUnits').value;state.unit=unit;addObject('rect',{name:$('#partName').value||undefined,label:$('#partLabel').value||undefined,w:+$('#partLength').value,h:+$('#partHeight').value,depth:+$('#partDepth').value,layer:$('#partLayer').value||'Unassigned',material:$('#partMaterial').value||'Wood',color:$('#partColor').value,notes:$('#partNotes').value,unit});ensureLayer($('#partLayer').value||'Unassigned');closePanel()};
+   button.onclick=()=>{
+     if(button.disabled)return;
+     const unit=$('#partUnits').value;
+     const values={
+       name:$('#partName').value.trim(),label:$('#partLabel').value.trim(),
+       w:Math.max(.01,+$('#partLength').value||.01),h:Math.max(.01,+$('#partHeight').value||.01),
+       depth:Math.max(.01,+$('#partDepth').value||.01),layer:$('#partLayer').value.trim()||'Unassigned',
+       material:$('#partMaterial').value.trim()||'Wood',color:$('#partColor').value,
+       notes:$('#partNotes').value,unit
+     };
+     state.unit=unit;
+     ensureLayer(values.layer);
+     if(o){
+       snapshot();
+       Object.assign(o,values);
+       renderAll();
+       saveLocal();
+       toast('Selected part updated');
+     }else{
+       addObject('rect',values);
+       toast('Part created');
+     }
+     closePanel();
+   };
  }
  if(name==='labels'){const o=selectedObjects()[0];$('#editName').value=o?.name||'';$('#editLabel').value=o?.label||'';$('#editNotes').value=o?.notes||'';$('#applyLabelBtn').onclick=()=>{selectedObjects().forEach(x=>{x.name=$('#editName').value;x.label=$('#editLabel').value;x.notes=$('#editNotes').value});renderAll();closePanel()}}
  if(name==='layers'){renderLayerPanel();$('#addLayerBtn').onclick=()=>{const n=prompt('Layer name');if(n){ensureLayer(n);renderLayerPanel();renderAll()}}}
