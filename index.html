@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#19181d" />
   <title>Cabin Rebuild Mapper</title>
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css?v=2.9" />
   <script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.161.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.161.0/examples/jsm/"}}</script>
 </head>
 <body>
@@ -64,8 +64,7 @@
     <button data-panel="layers"><span>▤</span>Layers</button>
     <button data-panel="measure"><span>↔</span>Measure</button>
     <button data-panel="materials"><span>▧</span>Materials</button>
-    <button id="uploadImageBtn"><span>▧</span>Upload Image</button>
-    <input id="imageUploadInput" type="file" accept="image/*" hidden />
+    <label id="uploadImageBtn" class="toolbar-upload" for="imageUploadInput"><span>▧</span>Upload Image<input id="imageUploadInput" type="file" accept="image/*" /></label>
     <button data-panel="labels"><span>T</span>Labels</button>
     <button data-panel="projects"><span>▦</span>Projects</button>
     <button data-panel="settings"><span>☷</span>Settings</button>
@@ -121,10 +120,14 @@
   <template id="layersPanelTemplate"><div id="layerPanelList" class="layer-panel-list"></div><button id="addLayerBtn" class="wide">+ Add layer</button></template>
 
   <template id="projectsPanelTemplate">
-    <div class="panel-form">
-      <label>Current project<input id="projectNameInput" placeholder="Project name" /></label>
-      <div class="two-col"><button class="primary wide" id="saveProjectPanelBtn">Save Project</button><button class="wide" id="newProjectBtn">New Project</button></div>
-      <button class="danger wide" id="resetProjectBtn">Clear Current Project</button>
+    <div class="panel-form project-manager">
+      <label>Project name<input id="projectNameInput" placeholder="Example: Johnson Cabin" /></label>
+      <button class="primary wide" id="saveProjectPanelBtn">Save Project</button>
+      <div class="project-load-box">
+        <label>Load saved project<select id="savedProjectSelect"><option value="">Choose a saved project…</option></select></label>
+        <button class="wide" id="loadSelectedProjectBtn">Load Project</button>
+      </div>
+      <div class="two-col"><button class="wide" id="newProjectBtn">New Blank Project</button><button class="danger wide" id="resetProjectBtn">Clear Current</button></div>
       <h3 class="project-list-title">Saved Projects</h3>
       <div id="savedProjectsList" class="saved-projects-list"></div>
     </div>
@@ -176,6 +179,6 @@
     <div id="colorSwatches" class="color-swatches"></div>
     <div class="color-picker-actions"><button id="cancelColorPicker">Cancel</button><button class="primary" id="setColorPicker">Set</button></div>
   </section>
-  <script type="module" src="app.js"></script>
+  <script type="module" src="app.js?v=2.9"></script>
 </body>
 </html>

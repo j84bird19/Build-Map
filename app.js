@@ -9,7 +9,7 @@ const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
 const state = {
   objects: [], selected: [], layers: [{name:'Front Wall', visible:true, locked:false, color:'#22c44b'}],
   unit:'ft', zoom:42, panX:70, panY:55, snap:true, grid:0.5, undo:[], redo:[],
-  activeView:'design', measureMode:false, measurePts:[], lastMeasurement:null, marquee:null, customShapes:[], projectName:'Untitled Project'
+  activeView:'design', measureMode:false, measurePts:[], lastMeasurement:null, marquee:null, customShapes:[], projectName:'Untitled Project', activeLayer:'Front Wall'
 };
 
 const canvas = $('#designCanvas'), ctx = canvas.getContext('2d');
@@ -20,7 +20,7 @@ let drag = null;
 function snapshot(){ state.undo.push(JSON.stringify({objects:state.objects,layers:state.layers})); if(state.undo.length>60)state.undo.shift(); state.redo=[]; }
 function restore(raw){ const d=JSON.parse(raw); state.objects=d.objects||[]; state.layers=d.layers||state.layers; state.selected=[]; renderAll(); }
 const PROJECTS_KEY='cabin-rebuild-mapper-projects-v1';
-function projectPayload(){return{version:3,name:state.projectName,objects:state.objects,layers:state.layers,grid:state.grid,snap:state.snap,customShapes:state.customShapes,unit:state.unit}}
+function projectPayload(){return{version:4,name:state.projectName,objects:state.objects,layers:state.layers,activeLayer:state.activeLayer,grid:state.grid,snap:state.snap,customShapes:state.customShapes,unit:state.unit}}
 function getSavedProjects(){try{return JSON.parse(localStorage.getItem(PROJECTS_KEY)||'{}')}catch{return{}}}
 function setSavedProjects(projects){localStorage.setItem(PROJECTS_KEY,JSON.stringify(projects))}
 function saveLocal(forceName=false){
@@ -34,12 +34,12 @@ function saveLocal(forceName=false){
   const projects=getSavedProjects();projects[name]={...projectPayload(),savedAt:new Date().toISOString()};setSavedProjects(projects);
   toast(`Saved: ${name}`);return true;
 }
-function loadProject(name){const d=getSavedProjects()[name];if(!d)return toast('Saved project not found');Object.assign(state,d);state.projectName=name;state.layers=(state.layers||[]).map(l=>({...l,opacity:l.opacity??1}));state.objects=(state.objects||[]).map((o,i)=>({...o,name:o.name||o.label||`Part ${i+1}`}));state.selected=[];state.undo=[];state.redo=[];renderAll();closePanel();toast(`Loaded: ${name}`)}
-function newProject(){state.objects=[];state.selected=[];state.layers=[{name:'Front Wall',visible:true,locked:false,color:'#22c44b',opacity:1}];state.projectName='Untitled Project';state.undo=[];state.redo=[];state.lastMeasurement=null;renderAll();closePanel();toast('New blank project')}
+function loadProject(name){const d=getSavedProjects()[name];if(!d)return toast('Saved project not found');Object.assign(state,d);state.projectName=name;state.layers=(state.layers||[]).map(l=>({...l,opacity:l.opacity??1}));state.activeLayer=(state.layers.some(l=>l.name===state.activeLayer)?state.activeLayer:state.layers[0]?.name)||'Front Wall';state.objects=(state.objects||[]).map((o,i)=>({...o,name:o.name||o.label||`Part ${i+1}`}));state.selected=[];state.undo=[];state.redo=[];renderAll();closePanel();toast(`Loaded: ${name}`)}
+function newProject(){state.objects=[];state.selected=[];state.layers=[{name:'Front Wall',visible:true,locked:false,color:'#22c44b',opacity:1}];state.activeLayer='Front Wall';state.projectName='Untitled Project';state.undo=[];state.redo=[];state.lastMeasurement=null;renderAll();closePanel();toast('New blank project')}
 function loadLocal(){
   // Projects intentionally open blank. Preserve one legacy build as a recoverable saved project.
   try{const legacy=JSON.parse(localStorage.getItem('cabin-rebuild-mapper-v25')||localStorage.getItem('cabin-rebuild-mapper-v2'));if(legacy){const projects=getSavedProjects();if(!projects['Recovered Project']){projects['Recovered Project']={...legacy,name:'Recovered Project',savedAt:new Date().toISOString()};setSavedProjects(projects)}}}catch{}
-  state.layers=state.layers.map(l=>({...l,opacity:l.opacity??1}));
+  state.layers=state.layers.map(l=>({...l,opacity:l.opacity??1}));state.activeLayer=(state.layers.some(l=>l.name===state.activeLayer)?state.activeLayer:state.layers[0]?.name)||'Front Wall';
 }
 function toast(msg){ $('#selectionReadout').textContent=msg; clearTimeout(toast.t); toast.t=setTimeout(updateReadout,1800); }
 
@@ -353,7 +353,7 @@ for(const el of [canvas,$('#canvasWrap'),$('#designView')]){
   el.addEventListener('touchmove',e=>e.preventDefault(),{passive:false});
 }
 
-function addObject(type='rect',data={}){snapshot();const i=state.objects.length+1,o={id:uid(),type,name:data.name||data.label||`Part ${i}`,label:data.label||`P-${String(i).padStart(3,'0')}`,x:data.x??4,y:data.y??4,w:+(data.w??4),h:+(data.h??1),depth:+(data.depth??1),rot:0,color:data.color||'#8b6b45',material:data.material||'Wood',layer:data.layer||'Front Wall',notes:data.notes||'',unit:data.unit||state.unit,hidden:false,locked:false};state.objects.push(o);state.selected=[o.id];renderAll();return o}
+function addObject(type='rect',data={}){snapshot();const i=state.objects.length+1,o={id:uid(),type,name:data.name||data.label||`Part ${i}`,label:data.label||`P-${String(i).padStart(3,'0')}`,x:data.x??4,y:data.y??4,w:+(data.w??4),h:+(data.h??1),depth:+(data.depth??1),rot:0,color:data.color||'#8b6b45',material:data.material||'Wood',layer:data.layer||state.activeLayer||'Front Wall',notes:data.notes||'',unit:data.unit||state.unit,hidden:false,locked:false};state.objects.push(o);state.selected=[o.id];renderAll();return o}
 function selectedObjects(){return state.selected.map(id=>state.objects.find(o=>o.id===id)).filter(Boolean)}
 function duplicate(){const sel=selectedObjects();if(!sel.length)return;snapshot();state.selected=[];for(const o of sel){const n={...structuredClone(o),id:uid(),x:o.x+.5,y:o.y+.5,label:o.label};delete n.parentId;state.objects.push(n);state.selected.push(n.id)}renderAll()}
 function removeSelected(){if(!state.selected.length)return;snapshot();state.objects=state.objects.filter(o=>!state.selected.includes(o.id));state.selected=[];renderAll()}
@@ -415,7 +415,7 @@ function wirePanel(name){
      $('#partHeight').value=o.h??'';
      $('#partDepth').value=o.depth??'';
      $('#partUnits').value=o.unit||state.unit;
-     $('#partLayer').value=o.layer||'';
+     $('#partLayer').value=o.layer||state.activeLayer||'';
      $('#partMaterial').value=o.material||'';
      colorInput.value=o.color||'#8b6b45';
      colorTrigger.querySelector('i').style.background=colorInput.value;
@@ -430,6 +430,7 @@ function wirePanel(name){
      $('#partName').value='';
      $('#partLabel').value='';
      $('#partNotes').value='';
+     $('#partLayer').value=state.activeLayer||state.layers[0]?.name||'Front Wall';
      button.textContent='Create Part';
    }
 
@@ -446,6 +447,7 @@ function wirePanel(name){
      };
      state.unit=unit;
      ensureLayer(values.layer);
+     state.activeLayer=values.layer;
      if(o){
        snapshot();
        Object.assign(o,values);
@@ -460,7 +462,7 @@ function wirePanel(name){
    };
  }
  if(name==='labels'){const o=selectedObjects()[0];$('#editName').value=o?.name||'';$('#editLabel').value=o?.label||'';$('#editNotes').value=o?.notes||'';$('#applyLabelBtn').onclick=()=>{selectedObjects().forEach(x=>{x.name=$('#editName').value;x.label=$('#editLabel').value;x.notes=$('#editNotes').value});renderAll();closePanel()}}
- if(name==='layers'){renderLayerPanel();$('#addLayerBtn').onclick=()=>{const n=prompt('Layer name');if(n){ensureLayer(n);renderLayerPanel();renderAll()}}}
+ if(name==='layers'){renderLayerPanel();$('#addLayerBtn').onclick=()=>{const n=prompt('Layer name');if(n){ensureLayer(n);state.activeLayer=n;renderLayerPanel();renderAll();toast(`Active layer: ${n}`)}}}
  if(name==='materials'){$$('[data-material]',$('#sheetContent')).forEach(b=>b.onclick=()=>{applyMaterial(b.dataset.material,b.dataset.color);closePanel()});wireColorTrigger('#customMaterialColorTrigger','#customMaterialColor',color=>applyMaterial('Custom',color))}
  if(name==='projects'){wireProjectsPanel()}
  if(name==='settings'){ $('#duplicateBtn').onclick=duplicate;$('#deleteBtn').onclick=removeSelected;$('#groupBtn').onclick=group;$('#ungroupBtn').onclick=()=>{selectedObjects().forEach(o=>delete o.groupId);renderAll()};$('#uniteBtn').onclick=()=>booleanOp('unite');$('#subtractBtn').onclick=()=>booleanOp('subtract');$('#intersectBtn').onclick=()=>booleanOp('intersect');$('#excludeBtn').onclick=()=>booleanOp('exclude');$('#lockBtn').onclick=()=>{selectedObjects().forEach(o=>o.locked=!o.locked);renderAll()};$('#hideBtn').onclick=()=>{selectedObjects().forEach(o=>o.hidden=true);state.selected=[];renderAll()};$('#snapToggle').checked=state.snap;$('#snapToggle').onchange=e=>state.snap=e.target.checked;$('#gridSize').value=state.grid;$('#gridSize').onchange=e=>{state.grid=+e.target.value;render2d()};$('#clearProjectBtn').onclick=()=>{if(confirm('Clear the entire project?')){snapshot();state.objects=[];state.selected=[];renderAll();closePanel()}} }
@@ -498,15 +500,30 @@ function ensureLayer(name){if(!state.layers.some(l=>l.name===name))state.layers.
 function renderLayerPanel(){
   const host=$('#layerPanelList');if(!host)return;state.layers.forEach(l=>l.opacity=l.opacity??1);
   const icon=l=>l.locked?`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V7a5 5 0 0 1 10 0v3h1.5A1.5 1.5 0 0 1 20 11.5v8A1.5 1.5 0 0 1 18.5 21h-13A1.5 1.5 0 0 1 4 19.5v-8A1.5 1.5 0 0 1 5.5 10H7Zm2 0h6V7a3 3 0 0 0-6 0v3Z"/></svg>`:`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 10V7a5 5 0 0 0-9.9-1H9.2A3 3 0 0 1 15 7v3H5.5A1.5 1.5 0 0 0 4 11.5v8A1.5 1.5 0 0 0 5.5 21h13a1.5 1.5 0 0 0 1.5-1.5v-8a1.5 1.5 0 0 0-1.5-1.5H17Z"/></svg>`;
-  host.innerHTML=state.layers.map((l,i)=>`<div class="layer-row"><input type="checkbox" data-vis="${i}" ${l.visible?'checked':''}><span><i class="layer-dot" style="background:${l.color};display:inline-block;margin-right:7px"></i>${l.name}<small>${Math.round(l.opacity*100)}%</small></span><button class="layer-lock ${l.locked?'is-locked':''}" data-lock="${i}" aria-label="${l.locked?'Unlock':'Lock'} ${l.name}">${icon(l)}</button><label class="layer-opacity">Opacity<input type="range" min="0" max="100" value="${Math.round(l.opacity*100)}" data-opacity="${i}"></label></div>`).join('');
+  host.innerHTML=state.layers.map((l,i)=>`<div class="layer-row ${l.name===state.activeLayer?'active-layer':''}"><input type="checkbox" data-vis="${i}" ${l.visible?'checked':''}><button type="button" class="layer-name-button" data-active-layer="${i}"><i class="layer-dot" style="background:${l.color}"></i><span>${escapeHtml(l.name)}</span><small>${l.name===state.activeLayer?'ACTIVE · ':''}${Math.round(l.opacity*100)}%</small></button><button class="layer-lock ${l.locked?'is-locked':''}" data-lock="${i}" aria-label="${l.locked?'Unlock':'Lock'} ${escapeHtml(l.name)}">${icon(l)}</button><label class="layer-opacity"><b>Opacity</b><input type="range" min="0" max="100" value="${Math.round(l.opacity*100)}" data-opacity="${i}"><output>${Math.round(l.opacity*100)}%</output></label></div>`).join('');
+  $$('[data-active-layer]',host).forEach(x=>x.onclick=()=>{state.activeLayer=state.layers[+x.dataset.activeLayer].name;renderLayerPanel();updateReadout();toast(`Active layer: ${state.activeLayer}`)});
   $$('[data-vis]',host).forEach(x=>x.onchange=()=>{state.layers[+x.dataset.vis].visible=x.checked;renderAll()});
   $$('[data-lock]',host).forEach(x=>x.onclick=()=>{const l=state.layers[+x.dataset.lock];l.locked=!l.locked;state.objects.filter(o=>o.layer===l.name).forEach(o=>o.locked=l.locked);renderLayerPanel();renderAll()});
-  $$('[data-opacity]',host).forEach(x=>x.oninput=()=>{state.layers[+x.dataset.opacity].opacity=+x.value/100;const small=x.closest('.layer-row').querySelector('small');if(small)small.textContent=`${x.value}%`;renderAll()});
+  $$('[data-opacity]',host).forEach(x=>x.oninput=()=>{state.layers[+x.dataset.opacity].opacity=+x.value/100;const row=x.closest('.layer-row'),small=row.querySelector('.layer-name-button small'),out=row.querySelector('output');if(small)small.textContent=`${state.layers[+x.dataset.opacity].name===state.activeLayer?'ACTIVE · ':''}${x.value}%`;if(out)out.textContent=`${x.value}%`;renderAll()});
 }
 function wireProjectsPanel(){
-  $('#projectNameInput').value=state.projectName||'Untitled Project';
-  const render=()=>{const projects=getSavedProjects(),host=$('#savedProjectsList');const names=Object.keys(projects).sort((a,b)=>(projects[b].savedAt||'').localeCompare(projects[a].savedAt||''));host.innerHTML=names.length?names.map(n=>`<div class="saved-project-row"><button class="project-load" data-load-project="${encodeURIComponent(n)}"><b>${n}</b><small>${projects[n].savedAt?new Date(projects[n].savedAt).toLocaleString():''}</small></button><button class="project-delete" data-delete-project="${encodeURIComponent(n)}" aria-label="Delete ${n}">×</button></div>`).join(''):'<p class="hint">No saved projects yet.</p>';$$('[data-load-project]',host).forEach(b=>b.onclick=()=>loadProject(decodeURIComponent(b.dataset.loadProject)));$$('[data-delete-project]',host).forEach(b=>b.onclick=()=>{const n=decodeURIComponent(b.dataset.deleteProject);if(confirm(`Delete saved project “${n}”?`)){const ps=getSavedProjects();delete ps[n];setSavedProjects(ps);render()}})};
-  $('#saveProjectPanelBtn').onclick=()=>{state.projectName=$('#projectNameInput').value.trim()||'Untitled Project';if(saveLocal())render()};
+  const nameInput=$('#projectNameInput'), select=$('#savedProjectSelect');
+  nameInput.value=state.projectName==='Untitled Project'?'':(state.projectName||'');
+  const render=()=>{
+    const projects=getSavedProjects(),host=$('#savedProjectsList');
+    const names=Object.keys(projects).sort((a,b)=>(projects[b].savedAt||'').localeCompare(projects[a].savedAt||''));
+    select.innerHTML='<option value="">Choose a saved project…</option>'+names.map(n=>`<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
+    host.innerHTML=names.length?names.map(n=>`<div class="saved-project-row"><button class="project-load" data-load-project="${encodeURIComponent(n)}"><b>${escapeHtml(n)}</b><small>${projects[n].savedAt?new Date(projects[n].savedAt).toLocaleString():''}</small></button><button class="project-delete" data-delete-project="${encodeURIComponent(n)}" aria-label="Delete ${escapeHtml(n)}">×</button></div>`).join(''):'<p class="hint">No saved projects yet. Name this project above, then tap Save Project.</p>';
+    $$('[data-load-project]',host).forEach(b=>b.onclick=()=>loadProject(decodeURIComponent(b.dataset.loadProject)));
+    $$('[data-delete-project]',host).forEach(b=>b.onclick=()=>{const n=decodeURIComponent(b.dataset.deleteProject);if(confirm(`Delete saved project “${n}”?`)){const ps=getSavedProjects();delete ps[n];setSavedProjects(ps);render()}});
+  };
+  $('#saveProjectPanelBtn').onclick=()=>{
+    const name=nameInput.value.trim();
+    if(!name){nameInput.focus();return toast('Enter a project name first')}
+    state.projectName=name;
+    if(saveLocal())render();
+  };
+  $('#loadSelectedProjectBtn').onclick=()=>{if(!select.value)return toast('Choose a saved project first');loadProject(select.value)};
   $('#newProjectBtn').onclick=()=>{if(!state.objects.length||confirm('Start a new blank project? Unsaved changes will be lost.'))newProject()};
   $('#resetProjectBtn').onclick=()=>{if(confirm('Clear every object from the current project?')){snapshot();state.objects=[];state.selected=[];state.lastMeasurement=null;renderAll();toast('Current project cleared')}};
   render();
@@ -527,10 +544,9 @@ function switchView(v){state.activeView=v;$$('.view').forEach(x=>x.classList.tog
 function renderAll(){render2d();renderParts();sync3d();}
 
 $$('.bottom-toolbar button[data-panel]').forEach(b=>b.onclick=()=>openPanel(b.dataset.panel));$('#closeSheet').onclick=closePanel;$('#sheetBackdrop').onclick=closePanel;
-$('#uploadImageBtn').onclick=()=>$('#imageUploadInput').click();
-$('#imageUploadInput').onchange=e=>{const file=e.target.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=()=>{const img=new Image();img.onload=()=>{snapshot();const maxWorld=8,ratio=img.naturalWidth/Math.max(1,img.naturalHeight);let w=ratio>=1?maxWorld:maxWorld*ratio,h=ratio>=1?maxWorld/ratio:maxWorld;const center=screenToWorld(canvas.clientWidth/2,canvas.clientHeight/2);const o={id:uid(),type:'image',operation:'compound',rasterData:reader.result,name:file.name.replace(/\.[^.]+$/,''),label:'',x:center.x,y:center.y,w,h,sourceW:w,sourceH:h,depth:.25,rot:0,color:'#ffffff',material:'Image',layer:state.layers[0]?.name||'Front Wall',unit:state.unit,notes:'Uploaded reference image'};state.objects.push(o);state.selected=[o.id];renderAll();toast('Image added to work area')};img.src=reader.result};reader.readAsDataURL(file);e.target.value=''};
+$('#imageUploadInput').onchange=e=>{const file=e.target.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=()=>{const img=new Image();img.onload=()=>{snapshot();const maxWorld=8,ratio=img.naturalWidth/Math.max(1,img.naturalHeight);let w=ratio>=1?maxWorld:maxWorld*ratio,h=ratio>=1?maxWorld/ratio:maxWorld;const center=screenToWorld(canvas.clientWidth/2,canvas.clientHeight/2);const o={id:uid(),type:'image',operation:'compound',rasterData:reader.result,name:file.name.replace(/\.[^.]+$/,''),label:'',x:center.x,y:center.y,w,h,sourceW:w,sourceH:h,depth:.25,rot:0,color:'#ffffff',material:'Image',layer:state.activeLayer||state.layers[0]?.name||'Front Wall',unit:state.unit,notes:'Uploaded reference image'};state.objects.push(o);state.selected=[o.id];renderAll();toast('Image added to work area')};img.src=reader.result};reader.readAsDataURL(file);e.target.value=''};
 $$('.view-tab').forEach(b=>b.onclick=()=>switchView(b.dataset.view));$('#processBtn').onclick=()=>switchView(state.activeView==='assembly'?'design':'assembly');
-$('#saveBtn').onclick=()=>saveLocal();$('#undoBtn').onclick=()=>{if(!state.undo.length)return;state.redo.push(JSON.stringify({objects:state.objects,layers:state.layers}));restore(state.undo.pop())};$('#redoBtn').onclick=()=>{if(!state.redo.length)return;state.undo.push(JSON.stringify({objects:state.objects,layers:state.layers}));restore(state.redo.pop())};
+$('#saveBtn').onclick=()=>openPanel('projects');$('#undoBtn').onclick=()=>{if(!state.undo.length)return;state.redo.push(JSON.stringify({objects:state.objects,layers:state.layers}));restore(state.undo.pop())};$('#redoBtn').onclick=()=>{if(!state.redo.length)return;state.undo.push(JSON.stringify({objects:state.objects,layers:state.layers}));restore(state.redo.pop())};
 $('#centerBtn').onclick=()=>{state.panX=70;state.panY=55;state.zoom=42;render2d()};$('#backBtn').onclick=()=>history.length>1?history.back():toast('Project stays saved on this device');
 $('#partsSearch').oninput=renderParts;$('#exportBtn').onclick=()=>{const blob=new Blob([JSON.stringify({version:2,objects:state.objects,layers:state.layers},null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='cabin-rebuild-project.json';a.click();URL.revokeObjectURL(a.href)};
 $('#importInput').onchange=async e=>{try{snapshot();const d=JSON.parse(await e.target.files[0].text());state.objects=d.objects||[];state.layers=d.layers||state.layers;renderAll();saveLocal()}catch{alert('That project file could not be read.')}};

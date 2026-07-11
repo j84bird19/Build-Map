@@ -1,12 +1,12 @@
-# Cabin Rebuild Mapper — v2.8
+# Cabin Rebuild Mapper v2.9
 
-GitHub-ready flat web app.
+Flat, GitHub Pages-ready build.
 
-## Added in v2.8
-- Upload Image tool adds a movable/resizable/rotatable reference image to the work area.
-- Per-layer opacity controls, reflected in both 2D and 3D views.
-- Named project saving with a saved-project list.
-- Load, new blank project, clear current project, and delete saved project actions.
-- App opens to a blank new project by default.
-
-All previously approved object editing, boolean operations, properties, custom shapes, color picker, zoom, rotation, resizing, duplication, measurement, rulers, and layer lock systems remain unchanged.
+## v2.9 fixes
+- New objects and uploaded images are assigned to the currently active layer.
+- The active layer is clearly highlighted and marked ACTIVE.
+- Layer opacity is visible and adjustable from 0–100%.
+- Upload Image uses the device's native file picker and adds the image to the active layer.
+- Projects panel includes project naming, Save Project, Load Project, New Blank Project, Clear Current, saved-project list, and delete controls.
+- The top Save button opens the Projects panel so project naming and save destination are always visible.
+- Existing locked editor, boolean, zoom, rotate, resize, duplicate, custom-shape, parts inspector, and color-picker systems were preserved.
