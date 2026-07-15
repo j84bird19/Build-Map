@@ -439,7 +439,13 @@ function wirePanel(name){
    }
 
    wireColorTrigger('#partColorTrigger','#partColor');
-   $('#partOpacity').oninput=e=>$('#partOpacityValue').textContent=`${e.target.value}%`;
+   $('#partOpacity').oninput=e=>{
+     $('#partOpacityValue').textContent=`${e.target.value}%`;
+     if(o){
+       o.opacity=Math.max(0,Math.min(1,(+e.target.value||0)/100));
+       renderAll();
+     }
+   };
    button.onclick=()=>{
      if(button.disabled)return;
      const unit=$('#partUnits').value;
