@@ -10,3 +10,10 @@ Flat, GitHub Pages-ready build.
 - Projects panel includes project naming, Save Project, Load Project, New Blank Project, Clear Current, saved-project list, and delete controls.
 - The top Save button opens the Projects panel so project naming and save destination are always visible.
 - Existing locked editor, boolean, zoom, rotate, resize, duplicate, custom-shape, parts inspector, and color-picker systems were preserved.
+
+
+## v3.0 changes
+- Added independent per-object opacity in the Parts / Properties Inspector.
+- Layer opacity now multiplies each object's stored opacity instead of overwriting it.
+- Strengthened the active layer indicator with a thick accent border, left bar, tinted background, and `✓ ACTIVE` badge.
+- Existing editing, boolean, zoom, sizing, project, upload, and layer systems remain unchanged.

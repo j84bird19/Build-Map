@@ -20,7 +20,7 @@ let drag = null;
 function snapshot(){ state.undo.push(JSON.stringify({objects:state.objects,layers:state.layers})); if(state.undo.length>60)state.undo.shift(); state.redo=[]; }
 function restore(raw){ const d=JSON.parse(raw); state.objects=d.objects||[]; state.layers=d.layers||state.layers; state.selected=[]; renderAll(); }
 const PROJECTS_KEY='cabin-rebuild-mapper-projects-v1';
-function projectPayload(){return{version:4,name:state.projectName,objects:state.objects,layers:state.layers,activeLayer:state.activeLayer,grid:state.grid,snap:state.snap,customShapes:state.customShapes,unit:state.unit}}
+function projectPayload(){return{version:5,name:state.projectName,objects:state.objects,layers:state.layers,activeLayer:state.activeLayer,grid:state.grid,snap:state.snap,customShapes:state.customShapes,unit:state.unit}}
 function getSavedProjects(){try{return JSON.parse(localStorage.getItem(PROJECTS_KEY)||'{}')}catch{return{}}}
 function setSavedProjects(projects){localStorage.setItem(PROJECTS_KEY,JSON.stringify(projects))}
 function saveLocal(forceName=false){
@@ -34,7 +34,7 @@ function saveLocal(forceName=false){
   const projects=getSavedProjects();projects[name]={...projectPayload(),savedAt:new Date().toISOString()};setSavedProjects(projects);
   toast(`Saved: ${name}`);return true;
 }
-function loadProject(name){const d=getSavedProjects()[name];if(!d)return toast('Saved project not found');Object.assign(state,d);state.projectName=name;state.layers=(state.layers||[]).map(l=>({...l,opacity:l.opacity??1}));state.activeLayer=(state.layers.some(l=>l.name===state.activeLayer)?state.activeLayer:state.layers[0]?.name)||'Front Wall';state.objects=(state.objects||[]).map((o,i)=>({...o,name:o.name||o.label||`Part ${i+1}`}));state.selected=[];state.undo=[];state.redo=[];renderAll();closePanel();toast(`Loaded: ${name}`)}
+function loadProject(name){const d=getSavedProjects()[name];if(!d)return toast('Saved project not found');Object.assign(state,d);state.projectName=name;state.layers=(state.layers||[]).map(l=>({...l,opacity:l.opacity??1}));state.activeLayer=(state.layers.some(l=>l.name===state.activeLayer)?state.activeLayer:state.layers[0]?.name)||'Front Wall';state.objects=(state.objects||[]).map((o,i)=>({...o,name:o.name||o.label||`Part ${i+1}`,opacity:o.opacity??1}));state.selected=[];state.undo=[];state.redo=[];renderAll();closePanel();toast(`Loaded: ${name}`)}
 function newProject(){state.objects=[];state.selected=[];state.layers=[{name:'Front Wall',visible:true,locked:false,color:'#22c44b',opacity:1}];state.activeLayer='Front Wall';state.projectName='Untitled Project';state.undo=[];state.redo=[];state.lastMeasurement=null;renderAll();closePanel();toast('New blank project')}
 function loadLocal(){
   // Projects intentionally open blank. Preserve one legacy build as a recoverable saved project.
@@ -168,7 +168,7 @@ function drawCompoundObject(o,p){
 }
 function drawObject(o){
   const layer=state.layers.find(l=>l.name===o.layer); if(layer && !layer.visible)return;
-  ctx.save();ctx.globalAlpha=layer?.opacity??1;
+  ctx.save();ctx.globalAlpha=(o.opacity??1)*(layer?.opacity??1);
   const p=worldToScreen(o.x,o.y);
   if(o.operation==='compound') drawCompoundObject(o,p);
   else {ctx.save();ctx.translate(p.x,p.y);ctx.rotate(o.rot||0);pathFor(o);ctx.fillStyle=o.color||'#8b6b45';ctx.fill();ctx.strokeStyle='#45494c';ctx.lineWidth=1.2;ctx.stroke();ctx.restore();}
@@ -353,7 +353,7 @@ for(const el of [canvas,$('#canvasWrap'),$('#designView')]){
   el.addEventListener('touchmove',e=>e.preventDefault(),{passive:false});
 }
 
-function addObject(type='rect',data={}){snapshot();const i=state.objects.length+1,o={id:uid(),type,name:data.name||data.label||`Part ${i}`,label:data.label||`P-${String(i).padStart(3,'0')}`,x:data.x??4,y:data.y??4,w:+(data.w??4),h:+(data.h??1),depth:+(data.depth??1),rot:0,color:data.color||'#8b6b45',material:data.material||'Wood',layer:data.layer||state.activeLayer||'Front Wall',notes:data.notes||'',unit:data.unit||state.unit,hidden:false,locked:false};state.objects.push(o);state.selected=[o.id];renderAll();return o}
+function addObject(type='rect',data={}){snapshot();const i=state.objects.length+1,o={id:uid(),type,name:data.name||data.label||`Part ${i}`,label:data.label||`P-${String(i).padStart(3,'0')}`,x:data.x??4,y:data.y??4,w:+(data.w??4),h:+(data.h??1),depth:+(data.depth??1),rot:0,color:data.color||'#8b6b45',material:data.material||'Wood',layer:data.layer||state.activeLayer||'Front Wall',notes:data.notes||'',unit:data.unit||state.unit,opacity:data.opacity??1,hidden:false,locked:false};state.objects.push(o);state.selected=[o.id];renderAll();return o}
 function selectedObjects(){return state.selected.map(id=>state.objects.find(o=>o.id===id)).filter(Boolean)}
 function duplicate(){const sel=selectedObjects();if(!sel.length)return;snapshot();state.selected=[];for(const o of sel){const n={...structuredClone(o),id:uid(),x:o.x+.5,y:o.y+.5,label:o.label};delete n.parentId;state.objects.push(n);state.selected.push(n.id)}renderAll()}
 function removeSelected(){if(!state.selected.length)return;snapshot();state.objects=state.objects.filter(o=>!state.selected.includes(o.id));state.selected=[];renderAll()}
@@ -420,6 +420,8 @@ function wirePanel(name){
      colorInput.value=o.color||'#8b6b45';
      colorTrigger.querySelector('i').style.background=colorInput.value;
      colorTrigger.querySelector('span').textContent=colorInput.value.toUpperCase();
+     $('#partOpacity').value=Math.round((o.opacity??1)*100);
+     $('#partOpacityValue').textContent=`${$('#partOpacity').value}%`;
      $('#partNotes').value=o.notes||'';
      button.textContent='Update Selected Part';
    }else if(selected.length>1){
@@ -430,11 +432,14 @@ function wirePanel(name){
      $('#partName').value='';
      $('#partLabel').value='';
      $('#partNotes').value='';
+     $('#partOpacity').value=100;
+     $('#partOpacityValue').textContent='100%';
      $('#partLayer').value=state.activeLayer||state.layers[0]?.name||'Front Wall';
      button.textContent='Create Part';
    }
 
    wireColorTrigger('#partColorTrigger','#partColor');
+   $('#partOpacity').oninput=e=>$('#partOpacityValue').textContent=`${e.target.value}%`;
    button.onclick=()=>{
      if(button.disabled)return;
      const unit=$('#partUnits').value;
@@ -443,6 +448,7 @@ function wirePanel(name){
        w:Math.max(.01,+$('#partLength').value||.01),h:Math.max(.01,+$('#partHeight').value||.01),
        depth:Math.max(.01,+$('#partDepth').value||.01),layer:$('#partLayer').value.trim()||'Unassigned',
        material:$('#partMaterial').value.trim()||'Wood',color:$('#partColor').value,
+       opacity:Math.max(0,Math.min(1,(+$('#partOpacity').value||0)/100)),
        notes:$('#partNotes').value,unit
      };
      state.unit=unit;
@@ -472,7 +478,7 @@ function wirePanel(name){
 function saveSelectedCustomShape(){
   const o=selectedObjects()[0];
   if(!o)return toast('Select one finished shape first');
-  const saved={...structuredClone(o),id:uid(),name:o.name||o.label||'Custom shape',x:0,y:0,rot:0,hidden:false,locked:false};
+  const saved={...structuredClone(o),id:uid(),name:o.name||o.label||'Custom shape',x:0,y:0,rot:0,opacity:o.opacity??1,hidden:false,locked:false};
   delete saved.groupId; delete saved.parentId;
   state.customShapes=state.customShapes||[];
   state.customShapes.push(saved);
@@ -500,11 +506,11 @@ function ensureLayer(name){if(!state.layers.some(l=>l.name===name))state.layers.
 function renderLayerPanel(){
   const host=$('#layerPanelList');if(!host)return;state.layers.forEach(l=>l.opacity=l.opacity??1);
   const icon=l=>l.locked?`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V7a5 5 0 0 1 10 0v3h1.5A1.5 1.5 0 0 1 20 11.5v8A1.5 1.5 0 0 1 18.5 21h-13A1.5 1.5 0 0 1 4 19.5v-8A1.5 1.5 0 0 1 5.5 10H7Zm2 0h6V7a3 3 0 0 0-6 0v3Z"/></svg>`:`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 10V7a5 5 0 0 0-9.9-1H9.2A3 3 0 0 1 15 7v3H5.5A1.5 1.5 0 0 0 4 11.5v8A1.5 1.5 0 0 0 5.5 21h13a1.5 1.5 0 0 0 1.5-1.5v-8a1.5 1.5 0 0 0-1.5-1.5H17Z"/></svg>`;
-  host.innerHTML=state.layers.map((l,i)=>`<div class="layer-row ${l.name===state.activeLayer?'active-layer':''}"><input type="checkbox" data-vis="${i}" ${l.visible?'checked':''}><button type="button" class="layer-name-button" data-active-layer="${i}"><i class="layer-dot" style="background:${l.color}"></i><span>${escapeHtml(l.name)}</span><small>${l.name===state.activeLayer?'ACTIVE · ':''}${Math.round(l.opacity*100)}%</small></button><button class="layer-lock ${l.locked?'is-locked':''}" data-lock="${i}" aria-label="${l.locked?'Unlock':'Lock'} ${escapeHtml(l.name)}">${icon(l)}</button><label class="layer-opacity"><b>Opacity</b><input type="range" min="0" max="100" value="${Math.round(l.opacity*100)}" data-opacity="${i}"><output>${Math.round(l.opacity*100)}%</output></label></div>`).join('');
+  host.innerHTML=state.layers.map((l,i)=>`<div class="layer-row ${l.name===state.activeLayer?'active-layer':''}"><input type="checkbox" data-vis="${i}" ${l.visible?'checked':''}><button type="button" class="layer-name-button" data-active-layer="${i}" aria-current="${l.name===state.activeLayer?'true':'false'}"><i class="layer-dot" style="background:${l.color}"></i><span>${escapeHtml(l.name)}</span><small>${l.name===state.activeLayer?'<strong>✓ ACTIVE</strong> · ':''}${Math.round(l.opacity*100)}%</small></button><button class="layer-lock ${l.locked?'is-locked':''}" data-lock="${i}" aria-label="${l.locked?'Unlock':'Lock'} ${escapeHtml(l.name)}">${icon(l)}</button><label class="layer-opacity"><b>Opacity</b><input type="range" min="0" max="100" value="${Math.round(l.opacity*100)}" data-opacity="${i}"><output>${Math.round(l.opacity*100)}%</output></label></div>`).join('');
   $$('[data-active-layer]',host).forEach(x=>x.onclick=()=>{state.activeLayer=state.layers[+x.dataset.activeLayer].name;renderLayerPanel();updateReadout();toast(`Active layer: ${state.activeLayer}`)});
   $$('[data-vis]',host).forEach(x=>x.onchange=()=>{state.layers[+x.dataset.vis].visible=x.checked;renderAll()});
   $$('[data-lock]',host).forEach(x=>x.onclick=()=>{const l=state.layers[+x.dataset.lock];l.locked=!l.locked;state.objects.filter(o=>o.layer===l.name).forEach(o=>o.locked=l.locked);renderLayerPanel();renderAll()});
-  $$('[data-opacity]',host).forEach(x=>x.oninput=()=>{state.layers[+x.dataset.opacity].opacity=+x.value/100;const row=x.closest('.layer-row'),small=row.querySelector('.layer-name-button small'),out=row.querySelector('output');if(small)small.textContent=`${state.layers[+x.dataset.opacity].name===state.activeLayer?'ACTIVE · ':''}${x.value}%`;if(out)out.textContent=`${x.value}%`;renderAll()});
+  $$('[data-opacity]',host).forEach(x=>x.oninput=()=>{state.layers[+x.dataset.opacity].opacity=+x.value/100;const row=x.closest('.layer-row'),small=row.querySelector('.layer-name-button small'),out=row.querySelector('output');if(small)small.innerHTML=`${state.layers[+x.dataset.opacity].name===state.activeLayer?'<strong>✓ ACTIVE</strong> · ':''}${x.value}%`;if(out)out.textContent=`${x.value}%`;renderAll()});
 }
 function wireProjectsPanel(){
   const nameInput=$('#projectNameInput'), select=$('#savedProjectSelect');
@@ -534,7 +540,7 @@ function renderParts(){const q=($('#partsSearch')?.value||'').toLowerCase();cons
 let renderer,scene,camera,controls,transform,meshMap=new Map();
 function init3d(){const host=$('#threeHost');renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));host.append(renderer.domElement);scene=new THREE.Scene();scene.background=new THREE.Color(0xd8dcdf);camera=new THREE.PerspectiveCamera(45,1,.1,500);camera.position.set(13,11,13);controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;scene.add(new THREE.HemisphereLight(0xffffff,0x56606a,2.5));const dl=new THREE.DirectionalLight(0xffffff,2);dl.position.set(8,15,10);scene.add(dl);const grid=new THREE.GridHelper(40,40,0x8c9499,0xbac0c4);scene.add(grid);transform=new TransformControls(camera,renderer.domElement);transform.addEventListener('dragging-changed',e=>controls.enabled=!e.value);transform.addEventListener('objectChange',()=>{const mesh=transform.object;if(!mesh)return;const o=state.objects.find(x=>x.id===mesh.userData.id);if(o){o.x=mesh.position.x;o.y=mesh.position.z;o.depth=Math.max(.01,mesh.scale.y*mesh.geometry.parameters.height);o.rot=-mesh.rotation.y;render2d();renderParts()}});scene.add(transform);renderer.domElement.addEventListener('pointerdown',pick3d);animate3d();resize3d()}
 function shapeGeometry(o){if(o.type==='circle'||o.type==='log')return new THREE.CylinderGeometry(o.w/2,o.w/2,o.depth,32);return new THREE.BoxGeometry(o.w,o.depth,o.h)}
-function sync3d(){if(!scene)return;for(const m of meshMap.values())scene.remove(m);meshMap.clear();for(const o of state.objects.filter(x=>!x.hidden&&!x.parentId)){const layer=state.layers.find(l=>l.name===o.layer);const opacity=layer?.opacity??1;const mat=new THREE.MeshStandardMaterial({color:o.color||'#8b6b45',roughness:.8,transparent:opacity<1,opacity,depthWrite:opacity>=1});const mesh=new THREE.Mesh(shapeGeometry(o),mat);mesh.position.set(o.x,o.depth/2,o.y);mesh.rotation.y=-(o.rot||0);mesh.userData.id=o.id;scene.add(mesh);meshMap.set(o.id,mesh)}const selected=selectedObjects()[0];if(selected&&meshMap.has(selected.id))transform.attach(meshMap.get(selected.id));else transform.detach()}
+function sync3d(){if(!scene)return;for(const m of meshMap.values())scene.remove(m);meshMap.clear();for(const o of state.objects.filter(x=>!x.hidden&&!x.parentId)){const layer=state.layers.find(l=>l.name===o.layer);const opacity=(o.opacity??1)*(layer?.opacity??1);const mat=new THREE.MeshStandardMaterial({color:o.color||'#8b6b45',roughness:.8,transparent:opacity<1,opacity,depthWrite:opacity>=1});const mesh=new THREE.Mesh(shapeGeometry(o),mat);mesh.position.set(o.x,o.depth/2,o.y);mesh.rotation.y=-(o.rot||0);mesh.userData.id=o.id;scene.add(mesh);meshMap.set(o.id,mesh)}const selected=selectedObjects()[0];if(selected&&meshMap.has(selected.id))transform.attach(meshMap.get(selected.id));else transform.detach()}
 function pick3d(e){const r=renderer.domElement.getBoundingClientRect(),mouse=new THREE.Vector2((e.clientX-r.left)/r.width*2-1,-((e.clientY-r.top)/r.height)*2+1),ray=new THREE.Raycaster();ray.setFromCamera(mouse,camera);const hit=ray.intersectObjects([...meshMap.values()])[0];if(hit){state.selected=[hit.object.userData.id];transform.attach(hit.object);render2d();updateReadout()}}
 function animate3d(){requestAnimationFrame(animate3d);controls?.update();renderer?.render(scene,camera)}
 function resize3d(){if(!renderer)return;const host=$('#threeHost'),w=host.clientWidth||1,h=host.clientHeight||1;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix()}
@@ -544,7 +550,7 @@ function switchView(v){state.activeView=v;$$('.view').forEach(x=>x.classList.tog
 function renderAll(){render2d();renderParts();sync3d();}
 
 $$('.bottom-toolbar button[data-panel]').forEach(b=>b.onclick=()=>openPanel(b.dataset.panel));$('#closeSheet').onclick=closePanel;$('#sheetBackdrop').onclick=closePanel;
-$('#imageUploadInput').onchange=e=>{const file=e.target.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=()=>{const img=new Image();img.onload=()=>{snapshot();const maxWorld=8,ratio=img.naturalWidth/Math.max(1,img.naturalHeight);let w=ratio>=1?maxWorld:maxWorld*ratio,h=ratio>=1?maxWorld/ratio:maxWorld;const center=screenToWorld(canvas.clientWidth/2,canvas.clientHeight/2);const o={id:uid(),type:'image',operation:'compound',rasterData:reader.result,name:file.name.replace(/\.[^.]+$/,''),label:'',x:center.x,y:center.y,w,h,sourceW:w,sourceH:h,depth:.25,rot:0,color:'#ffffff',material:'Image',layer:state.activeLayer||state.layers[0]?.name||'Front Wall',unit:state.unit,notes:'Uploaded reference image'};state.objects.push(o);state.selected=[o.id];renderAll();toast('Image added to work area')};img.src=reader.result};reader.readAsDataURL(file);e.target.value=''};
+$('#imageUploadInput').onchange=e=>{const file=e.target.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=()=>{const img=new Image();img.onload=()=>{snapshot();const maxWorld=8,ratio=img.naturalWidth/Math.max(1,img.naturalHeight);let w=ratio>=1?maxWorld:maxWorld*ratio,h=ratio>=1?maxWorld/ratio:maxWorld;const center=screenToWorld(canvas.clientWidth/2,canvas.clientHeight/2);const o={id:uid(),type:'image',operation:'compound',rasterData:reader.result,name:file.name.replace(/\.[^.]+$/,''),label:'',x:center.x,y:center.y,w,h,sourceW:w,sourceH:h,depth:.25,rot:0,color:'#ffffff',material:'Image',layer:state.activeLayer||state.layers[0]?.name||'Front Wall',unit:state.unit,opacity:1,notes:'Uploaded reference image'};state.objects.push(o);state.selected=[o.id];renderAll();toast('Image added to work area')};img.src=reader.result};reader.readAsDataURL(file);e.target.value=''};
 $$('.view-tab').forEach(b=>b.onclick=()=>switchView(b.dataset.view));$('#processBtn').onclick=()=>switchView(state.activeView==='assembly'?'design':'assembly');
 $('#saveBtn').onclick=()=>openPanel('projects');$('#undoBtn').onclick=()=>{if(!state.undo.length)return;state.redo.push(JSON.stringify({objects:state.objects,layers:state.layers}));restore(state.undo.pop())};$('#redoBtn').onclick=()=>{if(!state.redo.length)return;state.undo.push(JSON.stringify({objects:state.objects,layers:state.layers}));restore(state.redo.pop())};
 $('#centerBtn').onclick=()=>{state.panX=70;state.panY=55;state.zoom=42;render2d()};$('#backBtn').onclick=()=>history.length>1?history.back():toast('Project stays saved on this device');
