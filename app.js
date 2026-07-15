@@ -407,6 +407,30 @@ function wirePanel(name){
    const button=$('#addPartBtn');
    const colorInput=$('#partColor');
    const colorTrigger=$('#partColorTrigger');
+   let liveSnapshotTaken=false;
+   let saveTimer=null;
+
+   const beginLiveEdit=()=>{
+     if(!o||liveSnapshotTaken)return;
+     snapshot();
+     liveSnapshotTaken=true;
+   };
+   const scheduleSave=()=>{
+     clearTimeout(saveTimer);
+     saveTimer=setTimeout(()=>saveLocal(),250);
+   };
+   const liveUpdate=(field,value,{render=true}={})=>{
+     if(!o)return;
+     beginLiveEdit();
+     o[field]=value;
+     if(field==='unit')state.unit=value;
+     if(field==='layer'){
+       ensureLayer(value||'Unassigned');
+       state.activeLayer=value||'Unassigned';
+     }
+     if(render)renderAll();
+     scheduleSave();
+   };
 
    if(o){
      $('#partName').value=o.name||'';
@@ -423,7 +447,8 @@ function wirePanel(name){
      $('#partOpacity').value=Math.round((o.opacity??1)*100);
      $('#partOpacityValue').textContent=`${$('#partOpacity').value}%`;
      $('#partNotes').value=o.notes||'';
-     button.textContent='Update Selected Part';
+     button.textContent='Done';
+     button.classList.remove('primary');
    }else if(selected.length>1){
      button.textContent=`${selected.length} Parts Selected`;
      button.disabled=true;
@@ -438,10 +463,33 @@ function wirePanel(name){
      button.textContent='Create Part';
    }
 
-   wireColorTrigger('#partColorTrigger','#partColor');
-   $('#partOpacity').oninput=e=>$('#partOpacityValue').textContent=`${e.target.value}%`;
+   wireColorTrigger('#partColorTrigger','#partColor',color=>liveUpdate('color',color));
+
+   if(o){
+     $('#partName').oninput=e=>liveUpdate('name',e.target.value,{render:false});
+     $('#partLabel').oninput=e=>liveUpdate('label',e.target.value,{render:false});
+     $('#partLength').oninput=e=>liveUpdate('w',Math.max(.01,+e.target.value||.01));
+     $('#partHeight').oninput=e=>liveUpdate('h',Math.max(.01,+e.target.value||.01));
+     $('#partDepth').oninput=e=>liveUpdate('depth',Math.max(.01,+e.target.value||.01));
+     $('#partUnits').onchange=e=>liveUpdate('unit',e.target.value);
+     $('#partLayer').onchange=e=>liveUpdate('layer',e.target.value.trim()||'Unassigned');
+     $('#partMaterial').oninput=e=>liveUpdate('material',e.target.value,{render:false});
+     $('#partNotes').oninput=e=>liveUpdate('notes',e.target.value,{render:false});
+   }
+
+   $('#partOpacity').oninput=e=>{
+     $('#partOpacityValue').textContent=`${e.target.value}%`;
+     if(o)liveUpdate('opacity',Math.max(0,Math.min(1,(+e.target.value||0)/100)));
+   };
+
    button.onclick=()=>{
      if(button.disabled)return;
+     if(o){
+       saveLocal();
+       closePanel();
+       toast('Live changes saved');
+       return;
+     }
      const unit=$('#partUnits').value;
      const values={
        name:$('#partName').value.trim(),label:$('#partLabel').value.trim(),
@@ -454,16 +502,8 @@ function wirePanel(name){
      state.unit=unit;
      ensureLayer(values.layer);
      state.activeLayer=values.layer;
-     if(o){
-       snapshot();
-       Object.assign(o,values);
-       renderAll();
-       saveLocal();
-       toast('Selected part updated');
-     }else{
-       addObject('rect',values);
-       toast('Part created');
-     }
+     addObject('rect',values);
+     toast('Part created');
      closePanel();
    };
  }
